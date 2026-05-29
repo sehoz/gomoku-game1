@@ -99,7 +99,7 @@ def validate_move(stones, x, y, color, rule_set="standard", board_size=15):
         for dx, dy in DIRECTIONS
     ]
     if any(length > 5 for length in line_lengths):
-        return RuleResult(False, "有禁手规则下，黑棋不可形成长连", forbidden=True)
+        return RuleResult(True, "黑棋长连禁手，白棋获胜", status="white_win", winner="white", forbidden=True)
     if any(length == 5 for length in line_lengths):
         return RuleResult(True)
 
@@ -111,15 +111,17 @@ def validate_move(stones, x, y, color, rule_set="standard", board_size=15):
         four_count += int(has_four_threat(cells, center))
         three_count += int(has_open_three(cells, center))
     if four_count >= 2:
-        return RuleResult(False, "有禁手规则下，黑棋不可下双四", forbidden=True)
+        return RuleResult(True, "黑棋双四禁手，白棋获胜", status="white_win", winner="white", forbidden=True)
     if three_count >= 2:
-        return RuleResult(False, "有禁手规则下，黑棋不可下双三", forbidden=True)
+        return RuleResult(True, "黑棋双三禁手，白棋获胜", status="white_win", winner="white", forbidden=True)
     return RuleResult(True)
 
 
 def evaluate_move(stones, x, y, color, rule_set="standard", board_size=15):
     validation = validate_move(stones, x, y, color, rule_set, board_size)
     if not validation.ok:
+        return validation
+    if validation.forbidden:
         return validation
 
     next_stones = [*stones, {"x": x, "y": y, "color": color}]

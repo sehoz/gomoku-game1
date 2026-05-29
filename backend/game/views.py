@@ -32,11 +32,12 @@ def register(request):
     serializer = RegisterSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     username = serializer.validated_data["username"].strip()
-    email = serializer.validated_data.get("email", "")
     password = serializer.validated_data["password"]
-    if User.objects.filter(username=username).exists():
-        return Response({"detail": "用户名已存在"}, status=status.HTTP_400_BAD_REQUEST)
-    user = User.objects.create_user(username=username, email=email, password=password)
+    if not username:
+        return Response({"detail": "请输入用户名"}, status=status.HTTP_400_BAD_REQUEST)
+    if User.objects.filter(username__iexact=username).exists():
+        return Response({"detail": "该用户名已经被注册"}, status=status.HTTP_400_BAD_REQUEST)
+    user = User.objects.create_user(username=username, password=password)
     return token_response(user)
 
 
@@ -45,7 +46,10 @@ def register(request):
 def login(request):
     serializer = LoginSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
-    user = authenticate(username=serializer.validated_data["username"], password=serializer.validated_data["password"])
+    username = serializer.validated_data["username"].strip()
+    if not username:
+        return Response({"detail": "请输入用户名"}, status=status.HTTP_400_BAD_REQUEST)
+    user = authenticate(username=username, password=serializer.validated_data["password"])
     if not user:
         return Response({"detail": "用户名或密码错误"}, status=status.HTTP_400_BAD_REQUEST)
     return token_response(user)

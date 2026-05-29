@@ -5,6 +5,7 @@ interface RuleCheck {
   reason?: string;
   status?: GameStatus;
   winner?: StoneColor;
+  forbidden?: boolean;
 }
 
 const directions = [
@@ -84,7 +85,7 @@ export function validateMove(stones: Move[], x: number, y: number, color: StoneC
   if (ruleSet !== "renju" || color !== "black") return { ok: true };
   const nextBoard = boardFrom([...stones, { x, y, color }]);
   const lengths = directions.map(([dx, dy]) => 1 + count(nextBoard, x, y, dx, dy, color) + count(nextBoard, x, y, -dx, -dy, color));
-  if (lengths.some((length) => length > 5)) return { ok: false, reason: "有禁手规则下，黑棋不可形成长连" };
+  if (lengths.some((length) => length > 5)) return { ok: true, reason: "黑棋长连禁手，白棋获胜", status: "white_win", winner: "white", forbidden: true };
   if (lengths.some((length) => length === 5)) return { ok: true };
   let fours = 0;
   let threes = 0;
@@ -93,14 +94,15 @@ export function validateMove(stones: Move[], x: number, y: number, color: StoneC
     fours += hasFour(cells) ? 1 : 0;
     threes += hasThree(cells) ? 1 : 0;
   }
-  if (fours >= 2) return { ok: false, reason: "有禁手规则下，黑棋不可下双四" };
-  if (threes >= 2) return { ok: false, reason: "有禁手规则下，黑棋不可下双三" };
+  if (fours >= 2) return { ok: true, reason: "黑棋双四禁手，白棋获胜", status: "white_win", winner: "white", forbidden: true };
+  if (threes >= 2) return { ok: true, reason: "黑棋双三禁手，白棋获胜", status: "white_win", winner: "white", forbidden: true };
   return { ok: true };
 }
 
 export function evaluateMove(stones: Move[], x: number, y: number, color: StoneColor, ruleSet: RuleSet, size = 15): RuleCheck & { status: GameStatus } {
   const validation = validateMove(stones, x, y, color, ruleSet, size);
   if (!validation.ok) return { ...validation, status: "playing" as GameStatus };
+  if (validation.forbidden) return { ...validation, status: validation.status || "white_win" };
   const board = boardFrom([...stones, { x, y, color }]);
   const maxLine = Math.max(...directions.map(([dx, dy]) => 1 + count(board, x, y, dx, dy, color) + count(board, x, y, -dx, -dy, color)));
   const wins = ruleSet === "renju" && color === "black" ? maxLine === 5 : maxLine >= 5;

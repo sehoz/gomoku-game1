@@ -6,6 +6,16 @@ const props = defineProps<{ size?: number; stones: Move[]; interactive?: boolean
 const emit = defineEmits<{ play: [x: number, y: number] }>();
 const boardSize = computed(() => props.size || 15);
 const step = computed(() => 100 / (boardSize.value - 1));
+const starPoints = computed(() => {
+  if (boardSize.value !== 15) return [];
+  return [
+    { x: 3, y: 3 },
+    { x: 11, y: 3 },
+    { x: 7, y: 7 },
+    { x: 3, y: 11 },
+    { x: 11, y: 11 },
+  ];
+});
 
 function stoneAt(x: number, y: number) {
   return props.stones.find((stone) => stone.x === x && stone.y === y);
@@ -15,6 +25,13 @@ function stoneAt(x: number, y: number) {
 <template>
   <div class="board-shell">
     <div class="board-grid" :style="{ backgroundSize: `${step}% ${step}%` }">
+      <span
+        v-for="point in starPoints"
+        :key="`${point.x}-${point.y}`"
+        class="board-star"
+        :style="{ left: `${point.x * step}%`, top: `${point.y * step}%` }"
+        aria-hidden="true"
+      />
       <button
         v-for="index in boardSize * boardSize"
         :key="index"

@@ -103,6 +103,9 @@ CORS_ALLOWED_ORIGINS = [
     ).split(",")
     if origin.strip()
 ]
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://[a-zA-Z0-9-]+\.netlify\.app$",
+]
 CORS_ALLOW_CREDENTIALS = True
 
 redis_url = os.environ.get("REDIS_URL")

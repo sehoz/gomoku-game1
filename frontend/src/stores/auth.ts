@@ -31,8 +31,8 @@ export async function login(username: string, password: string) {
   authState.user = data.user;
 }
 
-export async function register(username: string, password: string, email = "") {
-  const data = await api.register(username, password, email);
+export async function register(username: string, password: string) {
+  const data = await api.register(username, password);
   localStorage.setItem("gomoku_token", data.token);
   authState.user = data.user;
 }

@@ -46,15 +46,21 @@ def choose_ai_move(stones, board_size, ai_color, rule_set, ai_level):
     ]
     if not legal:
         return None
+    safe_legal = [
+        move
+        for move in legal
+        if not evaluate_move(stones, move["x"], move["y"], ai_color, rule_set, board_size).forbidden
+    ]
+    choices = safe_legal or legal
     if ai_level == "easy":
-        return random.choice(legal)
+        return random.choice(choices)
 
     player_color = opponent(ai_color)
-    for move in legal:
+    for move in choices:
         result = evaluate_move(stones, move["x"], move["y"], ai_color, rule_set, board_size)
         if result.winner == ai_color:
             return move
-    for move in legal:
+    for move in choices:
         if validate_move(stones, move["x"], move["y"], player_color, rule_set, board_size).ok:
             result = evaluate_move(stones, move["x"], move["y"], player_color, rule_set, board_size)
             if result.winner == player_color:
@@ -67,7 +73,7 @@ def choose_ai_move(stones, board_size, ai_color, rule_set, ai_level):
                 "score": line_score(stones, move["x"], move["y"], ai_color) * (1.5 if ai_level == "hard" else 1)
                 + line_score(stones, move["x"], move["y"], player_color),
             }
-            for move in legal
+            for move in choices
         ),
         key=lambda item: item["score"],
         reverse=True,

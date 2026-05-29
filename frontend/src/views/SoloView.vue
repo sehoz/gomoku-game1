@@ -27,6 +27,34 @@ const statusLabel = computed(() => {
   }[status.value];
 });
 
+function localRandomAiMove() {
+  const moves = [];
+  const occupied = new Set(stones.value.map((stone) => `${stone.x},${stone.y}`));
+  for (let y = 0; y < 15; y += 1) {
+    for (let x = 0; x < 15; x += 1) {
+      if (occupied.has(`${x},${y}`)) continue;
+      const result = evaluateMove(stones.value, x, y, aiColor.value, ruleSet.value);
+      if (result.ok) moves.push({ x, y, result });
+    }
+  }
+  const safeMoves = moves.filter((move) => !move.result.forbidden);
+  const pool = safeMoves.length ? safeMoves : moves;
+  return pool[Math.floor(Math.random() * pool.length)] || null;
+}
+
+function applyAiMove(move: Move, result: { status: string; winner?: StoneColor; reason?: string; forbidden?: boolean }) {
+  stones.value.push(move);
+  playStoneSound();
+  status.value = (result.status as GameStatus) || "playing";
+  if (result.reason) {
+    message.value = result.reason;
+  } else if (result.winner) {
+    message.value = result.winner === playerColor.value ? "你赢了。" : "AI 获胜。";
+  } else {
+    message.value = "轮到你落子。";
+  }
+}
+
 async function aiPlay() {
   if (status.value !== "playing" || turn.value !== aiColor.value || thinking.value) return;
   thinking.value = true;
@@ -43,12 +71,18 @@ async function aiPlay() {
       message.value = "平局。";
       return;
     }
-    stones.value.push({ x: data.move.x, y: data.move.y, color: aiColor.value });
-    playStoneSound();
-    status.value = (data.result.status as GameStatus) || "playing";
-    message.value = data.result.winner ? "AI 获胜。" : "轮到你落子。";
+    applyAiMove({ x: data.move.x, y: data.move.y, color: aiColor.value }, data.result);
   } catch (err) {
-    message.value = err instanceof Error ? err.message : "AI 请求失败";
+    const fallback = localRandomAiMove();
+    if (!fallback) {
+      status.value = "draw";
+      message.value = "平局。";
+      return;
+    }
+    applyAiMove({ x: fallback.x, y: fallback.y, color: aiColor.value }, fallback.result);
+    if (!fallback.result.reason && !fallback.result.winner) {
+      message.value = "AI 已使用本地随机落子。";
+    }
   } finally {
     thinking.value = false;
   }
@@ -66,7 +100,13 @@ function play(x: number, y: number) {
   stones.value.push({ x, y, color: playerColor.value });
   playStoneSound();
   status.value = result.status;
-  message.value = result.winner ? "你赢了。" : "AI 思考中。";
+  if (result.reason) {
+    message.value = result.reason;
+  } else if (result.winner) {
+    message.value = result.winner === playerColor.value ? "你赢了。" : "你输了。";
+  } else {
+    message.value = "AI 思考中。";
+  }
 }
 
 function reset() {

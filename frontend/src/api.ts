@@ -13,19 +13,25 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (token()) {
     headers.set("Authorization", `Token ${token()}`);
   }
-  const response = await fetch(`${apiBase}${path}`, { ...options, headers });
+  let response: Response;
+  try {
+    response = await fetch(`${apiBase}${path}`, { ...options, headers });
+  } catch {
+    throw new Error("无法连接服务器，请稍后重试");
+  }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.detail || "请求失败");
+    const detail = data.detail || Object.values(data).flat().join("；");
+    throw new Error(detail || "请求失败");
   }
   return data;
 }
 
 export const api = {
-  async register(username: string, password: string, email = "") {
+  async register(username: string, password: string) {
     return request<{ token: string; user: UserProfile }>("/auth/register/", {
       method: "POST",
-      body: JSON.stringify({ username, password, email }),
+      body: JSON.stringify({ username, password }),
     });
   },
   async login(username: string, password: string) {
