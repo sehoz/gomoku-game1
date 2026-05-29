@@ -1,0 +1,13 @@
+backend/.venv/
+backend/db.sqlite3
+backend/staticfiles/
+frontend/node_modules/
+frontend/dist/
+.npm-cache/
+.netlify/
+*.tsbuildinfo
+*.pyc
+__pycache__/
+.env
+.env.local
+.DS_Store
