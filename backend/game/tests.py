@@ -470,6 +470,22 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(room.moves.count(), 1)
         self.assertEqual(GameSession.objects.count(), 1)
 
+    def test_second_move_by_white_is_persisted_through_api(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = self.playable_room(black, white)
+        black_client = APIClient()
+        white_client = APIClient()
+        black_client.force_authenticate(black)
+        white_client.force_authenticate(white)
+
+        first = black_client.post(f"/api/rooms/{room.id}/move/", {"x": 7, "y": 7}, format="json")
+        second = white_client.post(f"/api/rooms/{room.id}/move/", {"x": 7, "y": 8}, format="json")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(GameSession.objects.get(id=room.current_game_id).moves.count(), 2)
+
     def test_start_game_persists_both_ready_flags(self):
         black = User.objects.create_user(username="black", password="gomoku123")
         white = User.objects.create_user(username="white", password="gomoku123")

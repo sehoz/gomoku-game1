@@ -217,10 +217,6 @@ function applyState(state: RoomState) {
   }
 }
 
-function wait(ms: number) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 function errorMessage(err: unknown, fallback: string) {
   return err instanceof Error ? err.message : fallback;
 }
@@ -234,23 +230,6 @@ function isTransientError(err: unknown) {
     || message.includes("请求失败（5")
     || message.includes("请求过于频繁")
   );
-}
-
-async function waitForSocketOpen(timeoutMs = 900) {
-  if (socket?.readyState === WebSocket.OPEN) return true;
-  connectSocket();
-  const startedAt = Date.now();
-  while (!unmounted && Date.now() - startedAt < timeoutMs) {
-    if (socket?.readyState === WebSocket.OPEN) return true;
-    await wait(50);
-  }
-  return socket?.readyState === WebSocket.OPEN;
-}
-
-async function sendRealtime(payload: object) {
-  if (sendSocket(payload)) return true;
-  if (await waitForSocketOpen()) return sendSocket(payload);
-  return false;
 }
 
 async function loadState(redirectOnError = false) {
@@ -382,10 +361,9 @@ async function play(x: number, y: number) {
   moves.value = [...moves.value.filter((move) => move.x !== x || move.y !== y), pendingMove];
   playStoneSound();
   notice.value = "落子已发送。";
-  if (await sendRealtime({ type: "move", x, y })) return;
   try {
     await api.move(roomId, x, y);
-    applyState(await api.roomState(roomId));
+    void loadState(false);
   } catch (err) {
     if (isTransientError(err)) {
       notice.value = "网络波动，正在重新同步落子。";
@@ -408,10 +386,9 @@ async function sendChat() {
   const text = draft.value.trim();
   if (!text) return;
   draft.value = "";
-  if (await sendRealtime({ type: "chat", text })) return;
   try {
     await api.chat(roomId, text);
-    applyState(await api.roomState(roomId));
+    void loadState(false);
   } catch (err) {
     if (isTransientError(err)) {
       notice.value = "网络波动，聊天消息未确认，请稍后再试。";
@@ -423,10 +400,9 @@ async function sendChat() {
 
 async function switchPosition(targetSeat: string) {
   if (!canInitiateSeatSwitch.value || targetSeat === currentSeatKey.value) return;
-  if (await sendRealtime({ type: "switch_position", target_seat: targetSeat })) return;
   try {
     await api.switchPosition(roomId, targetSeat);
-    applyState(await api.roomState(roomId));
+    void loadState(false);
   } catch (err) {
     notice.value = isTransientError(err) ? "网络波动，换位操作未确认。" : errorMessage(err, "换位失败");
     void loadState(false);
@@ -446,10 +422,9 @@ function canSwitchTo(seatKey: string) {
 async function toggleReady() {
   if (!myColor.value) return;
   const nextReady = !myReady.value;
-  if (await sendRealtime({ type: "ready", ready: nextReady })) return;
   try {
     await api.readyRoom(roomId, nextReady);
-    applyState(await api.roomState(roomId));
+    void loadState(false);
   } catch (err) {
     notice.value = isTransientError(err) ? "网络波动，准备状态未确认。" : errorMessage(err, "准备状态更新失败");
   }
@@ -470,7 +445,6 @@ async function requestUndo() {
   }
   ownUndoPending.value = true;
   notice.value = "悔棋申请已发送，等待对方处理。";
-  if (await sendRealtime({ type: "undo_request" })) return;
   api.requestUndo(roomId)
     .then(() => loadState(false))
     .catch((err) => {
@@ -480,10 +454,6 @@ async function requestUndo() {
 }
 
 async function respondUndo(accepted: boolean) {
-  if (await sendRealtime({ type: accepted ? "undo_accept" : "undo_reject" })) {
-    if (!accepted) undoRequest.value = null;
-    return;
-  }
   try {
     const result = await api.respondUndo(roomId, accepted);
     notice.value = result.detail;
@@ -504,10 +474,6 @@ function rejectUndo() {
 }
 
 async function respondSeatSwitch(accepted: boolean) {
-  if (await sendRealtime({ type: accepted ? "seat_switch_accept" : "seat_switch_reject" })) {
-    if (!accepted) seatSwitchRequest.value = null;
-    return;
-  }
   try {
     const result = await api.respondSeatSwitch(roomId, accepted);
     notice.value = result.detail;
@@ -561,16 +527,10 @@ async function inviteUser(userId: number) {
 }
 
 async function leave() {
-  if (await sendRealtime({ type: "leave" })) {
-    window.setTimeout(() => {
-      socket?.close();
-      router.push("/rooms");
-    }, 120);
-    return;
-  }
   try {
     await api.leaveRoom(roomId);
   } finally {
+    socket?.close();
     router.push("/rooms");
   }
 }

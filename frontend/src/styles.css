@@ -51,13 +51,15 @@ p { color: var(--muted); line-height: 1.65; }
 .mode-icon, .room-icon { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 56px; border-radius: 8px; background: #e0f2f1; color: var(--accent-strong); }
 
 .board-toolbar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.board-controlbar { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; align-items: stretch; margin-bottom: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-strong); }
-.control-item, .control-notice, .control-actions { display: grid; align-content: center; min-height: 58px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.86); }
+.board-controlbar { display: grid; grid-template-columns: repeat(4, minmax(92px, 1fr)) minmax(260px, auto); gap: 10px; align-items: stretch; margin-bottom: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-strong); }
+.control-item, .control-notice, .control-actions { display: grid; align-content: center; min-height: 56px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.86); }
+.control-item strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .control-notice { color: var(--accent-strong); font-weight: 900; line-height: 1.45; }
 .control-notice.warning { border-color: rgba(154,52,18,.28); background: #fff7ed; color: var(--warning); }
 .board-notice { margin-bottom: 14px; }
-.control-actions { grid-auto-flow: column; align-items: center; gap: 8px; }
-.solo-control-actions { grid-auto-flow: unset; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.control-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.control-actions > button { flex: 0 1 auto; min-width: 86px; min-height: 38px; padding-inline: 12px; white-space: nowrap; }
+.solo-control-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .solo-control-actions .secondary-button { width: 100%; }
 .profile-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .board-toolbar > div, .profile-stats > div { padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.78); }
@@ -83,7 +85,7 @@ button:active:not(:disabled), .mode-card:active, .profile-pill:active, .upload-b
   box-shadow: inset 0 2px 6px rgba(29,42,42,.12);
 }
 
-.game-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+.game-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 18px; align-items: start; }
 .board-panel, .settings-panel, .room-list, .profile-card, .profile-stats, .locked-panel, .online-panel { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: var(--shadow); }
 .board-panel { padding: 18px; }
 .settings-panel { display: grid; gap: 16px; padding: 20px; }
@@ -126,9 +128,11 @@ button:active:not(:disabled), .mode-card:active, .profile-pill:active, .upload-b
 .tag, .seat-badge { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-strong); font-size: 13px; font-weight: 900; white-space: nowrap; }
 
 .seat-list { display: grid; gap: 10px; }
-.seat-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 72px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-strong); }
+.seat-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 72px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-strong); }
 .seat-player { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.seat-player > div { min-width: 0; }
 .seat-player strong { display: block; margin-bottom: 5px; }
+.seat-row > .inline-actions { justify-content: flex-end; }
 .seat-badge-black { background: #1d2a2a; color: #fff; }
 .seat-badge-white { background: #fff; color: #1d2a2a; }
 .seat-inline-label { display: inline-flex; align-items: center; min-height: 24px; padding: 0 8px; border: 1px solid var(--line); border-radius: 999px; font-size: 12px; font-weight: 900; vertical-align: middle; }
@@ -215,10 +219,14 @@ button:active:not(:disabled), .mode-card:active, .profile-pill:active, .upload-b
 .spinning { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+@media (max-width: 1120px) {
+  .board-controlbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .control-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .control-actions > button { flex: 1 1 120px; }
+}
+
 @media (max-width: 920px) {
   .home-grid, .game-layout { grid-template-columns: 1fr; }
-  .board-controlbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .control-actions { grid-column: 1 / -1; }
   .room-row, .history-row { grid-template-columns: 1fr; align-items: stretch; }
   .room-meta { justify-content: flex-start; }
 }
@@ -227,9 +235,12 @@ button:active:not(:disabled), .mode-card:active, .profile-pill:active, .upload-b
   .home-page, .page-shell { width: auto; margin: 0 10px; padding: 18px 0; }
   h1 { font-size: 32px; }
   .home-topbar, .page-header, .home-account-actions, .profile-card, .seat-row, .header-actions { flex-direction: column; align-items: stretch; }
+  .seat-row { grid-template-columns: 1fr; }
+  .seat-row > .inline-actions { justify-content: stretch; }
+  .seat-row > .inline-actions button { flex: 1 1 120px; }
   .board-toolbar, .board-controlbar, .profile-stats { grid-template-columns: 1fr; }
   .control-actions { grid-column: auto; }
-  .control-actions { grid-auto-flow: row; }
+  .control-actions > button { width: 100%; }
   .solo-control-actions { grid-template-columns: 1fr; }
   .replay-controls { grid-template-columns: 1fr; }
   .online-row { flex-direction: column; align-items: stretch; }
