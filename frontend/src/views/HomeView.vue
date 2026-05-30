@@ -78,19 +78,6 @@ onUnmounted(() => {
         <button v-if="!isAuthenticated()" class="primary-button" type="button" @click="authOpen = true"><LogIn :size="18" />登录</button>
       </div>
     </section>
-    <section class="online-panel">
-      <div class="section-title-row">
-        <div><h2>排行榜</h2><p>按胜场数排序。</p></div>
-        <Trophy :size="22" />
-      </div>
-      <div v-if="leaderboard.length === 0" class="empty-state">暂无排行榜数据。</div>
-      <div v-else class="online-list">
-        <div v-for="entry in leaderboard" :key="entry.user.id" class="online-row">
-          <div class="online-user"><span class="rank-badge">{{ entry.rank }}</span><Avatar :username="entry.user.username" /><div><strong>{{ entry.user.username }}</strong><span>{{ entry.totalGames }} 局</span></div></div>
-          <div class="online-stats"><span><Trophy :size="15" />{{ entry.wins }} 胜</span><span>胜率 {{ entry.winRate }}%</span></div>
-        </div>
-      </div>
-    </section>
     <section class="home-grid">
       <RouterLink class="mode-card" to="/solo">
         <span class="mode-icon"><Bot :size="28" /></span>
@@ -121,6 +108,19 @@ onUnmounted(() => {
         <div v-for="user in presenceState.users" :key="user.id" class="online-row">
           <div class="online-user"><Avatar :username="user.username" /><div><strong>{{ user.username }}</strong><span>ID：{{ user.id }}</span></div></div>
           <div class="online-stats"><span><Trophy :size="15" />{{ user.stats.wins }} 胜</span><span>胜率 {{ user.stats.winRate }}%</span></div>
+        </div>
+      </div>
+    </section>
+    <section class="online-panel">
+      <div class="section-title-row">
+        <div><h2>排行榜</h2><p>按胜场数排序，仅显示前五名。</p></div>
+        <Trophy :size="22" />
+      </div>
+      <div v-if="leaderboard.length === 0" class="empty-state">暂无排行榜数据。</div>
+      <div v-else class="online-list">
+        <div v-for="entry in leaderboard.slice(0, 5)" :key="entry.user.id" class="online-row">
+          <div class="online-user"><span class="rank-badge">{{ entry.rank }}</span><Avatar :username="entry.user.username" /><div><strong>{{ entry.user.username }}</strong><span>{{ entry.totalGames }} 局</span></div></div>
+          <div class="online-stats"><span><Trophy :size="15" />{{ entry.wins }} 胜</span><span>胜率 {{ entry.winRate }}%</span></div>
         </div>
       </div>
     </section>

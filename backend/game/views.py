@@ -201,7 +201,7 @@ def leaderboard(request):
                 "winRate": stats["winRate"],
             }
         )
-    entries = sorted(entries, key=lambda item: (-item["wins"], item["user"]["username"]))[:10]
+    entries = sorted(entries, key=lambda item: (-item["wins"], item["user"]["username"]))[:5]
     for index, entry in enumerate(entries, start=1):
         entry["rank"] = index
     return Response({"entries": LeaderboardEntrySerializer(entries, many=True).data})

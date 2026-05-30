@@ -150,7 +150,7 @@ function undo() {
           <div class="control-item"><span class="status-label">我的位置</span><strong class="stone-status"><span :class="['stone-icon', `stone-icon-${playerColor}`]" />{{ playerColor === "black" ? "黑棋" : "白棋" }}</strong></div>
           <div class="control-item"><span class="status-label">当前回合</span><strong class="stone-status"><span :class="['stone-icon', `stone-icon-${turn}`]" />{{ turn === "black" ? "黑棋" : "白棋" }}</strong></div>
           <div class="control-item"><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
-          <div class="control-actions">
+          <div class="control-actions solo-control-actions">
             <button class="secondary-button" type="button" @click="undo"><Undo2 :size="18" />悔棋</button>
             <button class="secondary-button" type="button" @click="reset"><RotateCcw :size="18" />重新开始</button>
           </div>
