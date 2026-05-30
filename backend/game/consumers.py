@@ -9,7 +9,18 @@ from rest_framework.authtoken.models import Token
 from .presence import mark_offline, mark_online, online_users_payload
 from .models import Room
 from .serializers import RoomStateSerializer
-from .services import add_chat, leave_room, make_move, switch_seat, undo_last_turn, user_color
+from .services import (
+    SeatSwitchNeedsConsent,
+    accept_seat_switch,
+    add_chat,
+    leave_room,
+    make_move,
+    set_ready,
+    switch_position,
+    touch_room,
+    undo_last_turn,
+    user_color,
+)
 
 
 @sync_to_async
@@ -22,7 +33,20 @@ def user_from_token(token_key):
 
 @sync_to_async
 def is_room_member(room_id, user):
-    return Room.objects.filter(id=room_id).filter(Q(black_player=user) | Q(white_player=user)).exists()
+    return (
+        Room.objects.filter(id=room_id)
+        .filter(Q(black_player=user) | Q(white_player=user) | Q(spectators__user=user))
+        .distinct()
+        .exists()
+    )
+
+
+@sync_to_async
+def mark_room_active(room_id):
+    try:
+        touch_room(Room.objects.get(id=room_id))
+    except Room.DoesNotExist:
+        pass
 
 
 @sync_to_async
@@ -49,8 +73,27 @@ def create_move(room_id, user, x, y):
 
 
 @sync_to_async
-def change_seat(room_id, user, target_color):
-    return switch_seat(Room.objects.get(id=room_id), user, target_color).id
+def change_position(room_id, user, target_seat):
+    try:
+        switch_position(Room.objects.get(id=room_id), user, target_seat)
+        return {"status": "switched"}
+    except SeatSwitchNeedsConsent as exc:
+        return {"status": "needs_consent", "request": exc.request}
+
+
+@sync_to_async
+def accept_position_request(room_id, request, responder):
+    accept_seat_switch(Room.objects.get(id=room_id), request, responder)
+    return {
+        "requester": request["requester_username"],
+        "from_label": request["from_label"],
+        "target_label": request["target_label"],
+    }
+
+
+@sync_to_async
+def change_ready(room_id, user, ready):
+    return set_ready(Room.objects.get(id=room_id), user, ready).id
 
 
 @sync_to_async
@@ -72,6 +115,7 @@ def create_undo_request(room_id, user):
         raise ValueError("等待另一名玩家加入")
     if not room.moves.filter(player=user).exists():
         raise ValueError("当前没有可以悔棋的落子")
+    touch_room(room)
     return {"user_id": user.id, "username": user.username, "color": color}
 
 
@@ -94,6 +138,14 @@ def accept_undo_request(room_id, requester_id, responder):
 
 
 @sync_to_async
+def reject_undo_request(room_id):
+    try:
+        touch_room(Room.objects.get(id=room_id))
+    except Room.DoesNotExist:
+        pass
+
+
+@sync_to_async
 def online_payload():
     return online_users_payload()
 
@@ -110,6 +162,7 @@ def set_presence_offline(user_id, channel_name):
 
 class RoomConsumer(AsyncWebsocketConsumer):
     pending_undo_requests = {}
+    pending_seat_switch_requests = {}
 
     async def connect(self):
         self.room_id = self.scope["url_route"]["kwargs"]["room_id"]
@@ -123,6 +176,7 @@ class RoomConsumer(AsyncWebsocketConsumer):
         self.group_name = f"room_{self.room_id}"
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
+        await mark_room_active(self.room_id)
         await self.send_state()
 
     async def disconnect(self, _close_code):
@@ -136,11 +190,52 @@ class RoomConsumer(AsyncWebsocketConsumer):
             if event_type == "chat":
                 await create_chat(self.room_id, self.user, payload.get("text", ""))
                 await self.broadcast_state()
+            elif event_type == "ping":
+                await mark_room_active(self.room_id)
             elif event_type == "move":
                 await create_move(self.room_id, self.user, payload.get("x"), payload.get("y"))
                 await self.broadcast_state()
-            elif event_type == "switch_seat":
-                await change_seat(self.room_id, self.user, payload.get("target_color"))
+            elif event_type in {"switch_seat", "switch_position"}:
+                target_seat = payload.get("target_seat") or payload.get("target_color")
+                result = await change_position(self.room_id, self.user, target_seat)
+                if result["status"] == "needs_consent":
+                    self.pending_seat_switch_requests[int(self.room_id)] = result["request"]
+                    await self.channel_layer.group_send(
+                        self.group_name,
+                        {"type": "seat.switch.request", "request": result["request"]},
+                    )
+                else:
+                    await self.broadcast_state()
+            elif event_type == "seat_switch_accept":
+                request = self.pending_seat_switch_requests.get(int(self.room_id))
+                if not request:
+                    await self.send_json({"type": "error", "detail": "当前没有待处理的换位申请"})
+                    return
+                result = await accept_position_request(self.room_id, request, self.user)
+                self.pending_seat_switch_requests.pop(int(self.room_id), None)
+                await self.broadcast_state()
+                await self.channel_layer.group_send(
+                    self.group_name,
+                    {
+                        "type": "seat.switch.result",
+                        "accepted": True,
+                        "detail": f"{result['requester']} 已换到{result['target_label']}。",
+                    },
+                )
+            elif event_type == "seat_switch_reject":
+                request = self.pending_seat_switch_requests.get(int(self.room_id))
+                if request:
+                    if request["target_user_id"] != self.user.id:
+                        await self.send_json({"type": "error", "detail": "只有目标位置上的玩家可以拒绝换位"})
+                        return
+                    self.pending_seat_switch_requests.pop(int(self.room_id), None)
+                    await reject_undo_request(self.room_id)
+                    await self.channel_layer.group_send(
+                        self.group_name,
+                        {"type": "seat.switch.result", "accepted": False, "detail": f"{self.user.username} 拒绝了换位申请。"},
+                    )
+            elif event_type == "ready":
+                await change_ready(self.room_id, self.user, payload.get("ready", True))
                 await self.broadcast_state()
             elif event_type == "leave":
                 room_exists = await leave_current_room(self.room_id, self.user)
@@ -165,6 +260,7 @@ class RoomConsumer(AsyncWebsocketConsumer):
             elif event_type == "undo_reject":
                 request = self.pending_undo_requests.pop(int(self.room_id), None)
                 if request:
+                    await reject_undo_request(self.room_id)
                     await self.channel_layer.group_send(self.group_name, {"type": "undo.result", "accepted": False, "detail": f"{self.user.username} 拒绝了悔棋申请。"})
         except Exception as exc:
             await self.send_json({"type": "error", "detail": str(exc)})
@@ -186,6 +282,12 @@ class RoomConsumer(AsyncWebsocketConsumer):
 
     async def undo_result(self, event):
         await self.send_json({"type": "undo_result", "accepted": event["accepted"], "detail": event["detail"]})
+
+    async def seat_switch_request(self, event):
+        await self.send_json({"type": "seat_switch_request", "request": event["request"]})
+
+    async def seat_switch_result(self, event):
+        await self.send_json({"type": "seat_switch_result", "accepted": event["accepted"], "detail": event["detail"]})
 
     async def send_state(self):
         state = await serialize_state(self.room_id)

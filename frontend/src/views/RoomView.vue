@@ -19,8 +19,20 @@ const messages = ref<ChatMessage[]>([]);
 const draft = ref("");
 const notice = ref("正在加载房间。");
 const undoRequest = ref<{ user_id: number; username: string; color: StoneColor } | null>(null);
+const seatSwitchRequest = ref<{
+  requester_id: number;
+  requester_username: string;
+  target_user_id: number;
+  target_username: string;
+  from_seat: string;
+  from_label: string;
+  target_seat: string;
+  target_label: string;
+} | null>(null);
 const ownUndoPending = ref(false);
+const ownSeatSwitchPending = ref(false);
 let socket: WebSocket | null = null;
+let heartbeatTimer: number | null = null;
 
 const turn = computed(() => nextTurn(moves.value));
 const myColor = computed<StoneColor | null>(() => {
@@ -29,7 +41,34 @@ const myColor = computed<StoneColor | null>(() => {
   if (room.value.white_player === authState.user.id) return "white";
   return null;
 });
-const canMove = computed(() => room.value?.players === 2 && room.value.status !== "finished" && myColor.value === turn.value);
+const spectatorSeat = computed(() => room.value?.spectators.find((seat) => seat.user === authState.user?.id) || null);
+const myRoleLabel = computed(() => {
+  if (myColor.value === "black") return "黑棋";
+  if (myColor.value === "white") return "白棋";
+  if (spectatorSeat.value) return `观众${spectatorSeat.value.seat_number}`;
+  return "未入席";
+});
+const myReady = computed(() => (myColor.value === "black" ? room.value?.black_ready : myColor.value === "white" ? room.value?.white_ready : false));
+const currentSeatKey = computed(() => {
+  if (myColor.value) return myColor.value;
+  if (spectatorSeat.value) return `spectator${spectatorSeat.value.seat_number}`;
+  return "";
+});
+const gameStarted = computed(() => room.value?.status !== "waiting" || moves.value.length > 0);
+const canReady = computed(() => Boolean(myColor.value && room.value?.players === 2 && room.value.status === "waiting" && moves.value.length === 0));
+const canMove = computed(() => room.value?.status === "playing" && myColor.value === turn.value);
+const canRequestUndo = computed(() => Boolean(myColor.value && moves.value.some((move) => move.player === authState.user?.id)));
+const canInitiateSeatSwitch = computed(() => Boolean(currentSeatKey.value && !(myColor.value && gameStarted.value)));
+const spectatorSlots = computed(() => {
+  const max = room.value?.max_spectators || 0;
+  return Array.from({ length: max }, (_, index) => {
+    const seatNumber = index + 1;
+    return {
+      seatNumber,
+      user: room.value?.spectators.find((seat) => seat.seat_number === seatNumber) || null,
+    };
+  });
+});
 const statusLabel = computed(() => {
   if (!room.value) return "加载中";
   if (room.value.winner === "black") return "黑棋获胜";
@@ -47,8 +86,12 @@ function applyState(state: RoomState) {
   if (state.moves.length > previousMoveCount) playStoneSound();
   if (state.room.winner) {
     notice.value = `${state.room.winner === "black" ? "黑棋" : "白棋"}获胜。`;
+  } else if (state.room.players < 2) {
+    notice.value = "等待另一名玩家加入。";
+  } else if (state.room.status === "waiting") {
+    notice.value = "双方都准备后对局开始。";
   } else {
-    notice.value = state.room.players < 2 ? "等待另一名玩家加入。" : `轮到${turn.value === "black" ? "黑棋" : "白棋"}。`;
+    notice.value = `轮到${turn.value === "black" ? "黑棋" : "白棋"}。`;
   }
 }
 
@@ -65,6 +108,10 @@ async function load() {
     return;
   }
   socket = new WebSocket(roomSocketUrl(roomId));
+  socket.onopen = () => {
+    sendSocket({ type: "ping" });
+    heartbeatTimer = window.setInterval(() => sendSocket({ type: "ping" }), 30000);
+  };
   socket.onmessage = (event) => {
     const data = JSON.parse(event.data);
     if (data.type === "state") applyState(data.state);
@@ -83,12 +130,30 @@ async function load() {
       undoRequest.value = null;
       notice.value = data.detail;
     }
+    if (data.type === "seat_switch_request") {
+      if (data.request.requester_id === authState.user?.id) {
+        ownSeatSwitchPending.value = true;
+        notice.value = `换位申请已发送，等待 ${data.request.target_username} 处理。`;
+      } else if (data.request.target_user_id === authState.user?.id) {
+        seatSwitchRequest.value = data.request;
+        notice.value = `${data.request.requester_username} 申请与你换位。`;
+      }
+    }
+    if (data.type === "seat_switch_result") {
+      ownSeatSwitchPending.value = false;
+      seatSwitchRequest.value = null;
+      notice.value = data.detail;
+    }
     if (data.type === "closed") {
       notice.value = "房间已解散。";
       router.push("/rooms");
     }
   };
   socket.onclose = () => {
+    if (heartbeatTimer !== null) {
+      window.clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
     notice.value = "连接已断开，可刷新房间重连。";
   };
 }
@@ -116,13 +181,36 @@ async function sendChat() {
   draft.value = "";
 }
 
-async function switchSeat(color: StoneColor) {
-  if (sendSocket({ type: "switch_seat", target_color: color })) return;
+async function switchPosition(targetSeat: string) {
+  if (!canInitiateSeatSwitch.value || targetSeat === currentSeatKey.value) return;
+  if (sendSocket({ type: "switch_position", target_seat: targetSeat })) return;
   try {
-    await api.switchSeat(roomId, color);
+    await api.switchPosition(roomId, targetSeat);
     applyState(await api.roomState(roomId));
   } catch (err) {
     notice.value = err instanceof Error ? err.message : "换位失败";
+  }
+}
+
+function seatButtonLabel(seatKey: string, occupied: boolean) {
+  if (seatKey === currentSeatKey.value) return "当前位置";
+  if (ownSeatSwitchPending.value) return "等待回应";
+  return occupied ? "申请换位" : "切换";
+}
+
+function canSwitchTo(seatKey: string) {
+  return canInitiateSeatSwitch.value && seatKey !== currentSeatKey.value && !ownSeatSwitchPending.value;
+}
+
+async function toggleReady() {
+  if (!myColor.value) return;
+  const nextReady = !myReady.value;
+  if (sendSocket({ type: "ready", ready: nextReady })) return;
+  try {
+    await api.readyRoom(roomId, nextReady);
+    applyState(await api.roomState(roomId));
+  } catch (err) {
+    notice.value = err instanceof Error ? err.message : "准备状态更新失败";
   }
 }
 
@@ -146,6 +234,20 @@ function rejectUndo() {
   undoRequest.value = null;
 }
 
+function acceptSeatSwitch() {
+  if (!sendSocket({ type: "seat_switch_accept" })) {
+    notice.value = "连接已断开，暂时不能处理换位申请。";
+  }
+}
+
+function rejectSeatSwitch() {
+  if (!sendSocket({ type: "seat_switch_reject" })) {
+    notice.value = "连接已断开，暂时不能处理换位申请。";
+    return;
+  }
+  seatSwitchRequest.value = null;
+}
+
 async function leave() {
   if (sendSocket({ type: "leave" })) {
     window.setTimeout(() => {
@@ -162,18 +264,25 @@ async function leave() {
 }
 
 onMounted(load);
-onUnmounted(() => socket?.close());
+onUnmounted(() => {
+  if (heartbeatTimer !== null) window.clearInterval(heartbeatTimer);
+  socket?.close();
+});
 </script>
 
 <template>
   <main class="page-shell">
-    <header class="page-header"><div><button class="link-button" type="button" @click="leave">‹ 返回房间</button><h1>{{ room?.name || "房间" }}</h1><p>黑棋在上，白棋在下；两人就位后开始。</p></div><div class="header-actions"><button class="secondary-button" :disabled="!myColor || ownUndoPending" type="button" @click="requestUndo"><Undo2 :size="18" />{{ ownUndoPending ? "等待回应" : "申请悔棋" }}</button><button class="secondary-button" type="button" @click="leave"><LogOut :size="18" />离开房间</button></div></header>
+    <header class="page-header"><div><button class="link-button" type="button" @click="leave">‹ 返回房间</button><h1>{{ room?.name || "房间" }}</h1><p>黑棋在上，白棋在下；两名玩家都准备后开始。</p></div><div class="header-actions"><span class="role-pill">{{ myRoleLabel }}</span><button class="secondary-button" type="button" @click="leave"><LogOut :size="18" />离开房间</button></div></header>
     <section class="game-layout">
       <div class="board-panel">
         <div class="board-toolbar">
           <div><span class="status-label">规则</span><strong>{{ room?.rule_set === "renju" ? "有禁手" : "无禁手" }}</strong></div>
           <div><span class="status-label">当前回合</span><strong>{{ turn === "black" ? "黑棋" : "白棋" }}</strong></div>
           <div><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
+        </div>
+        <div class="game-actions">
+          <button class="primary-button" :disabled="!canReady" type="button" @click="toggleReady"><Check :size="18" />{{ myReady ? "取消准备" : "准备" }}</button>
+          <button class="secondary-button" :disabled="!canRequestUndo || ownUndoPending" type="button" @click="requestUndo"><Undo2 :size="18" />{{ ownUndoPending ? "等待回应" : "申请悔棋" }}</button>
         </div>
         <GameBoard :stones="moves" :interactive="canMove" @play="play" />
         <div class="game-message">{{ notice }}</div>
@@ -185,17 +294,34 @@ onUnmounted(() => socket?.close());
             <button class="secondary-button" type="button" @click="rejectUndo"><X :size="16" />拒绝</button>
           </div>
         </div>
+        <div v-if="seatSwitchRequest" class="undo-request-panel">
+          <strong>{{ seatSwitchRequest.requester_username }} 申请换位</strong>
+          <span>对方想从{{ seatSwitchRequest.from_label }}换到你的{{ seatSwitchRequest.target_label }}位置。</span>
+          <div class="inline-actions">
+            <button class="primary-button" type="button" @click="acceptSeatSwitch"><Check :size="16" />同意</button>
+            <button class="secondary-button" type="button" @click="rejectSeatSwitch"><X :size="16" />拒绝</button>
+          </div>
+        </div>
       </div>
       <aside class="settings-panel">
         <h2>玩家</h2>
         <div class="seat-list">
           <div class="seat-row">
-            <div class="seat-player"><Avatar :username="room?.black_player_name || '等待'" /><div><strong>{{ room?.black_player_name || "等待好友加入" }}</strong><span class="seat-badge seat-badge-black">黑棋</span></div></div>
-            <button v-if="myColor && !room?.black_player && room?.players === 1" class="secondary-button" @click="switchSeat('black')">换到黑棋</button>
+            <div class="seat-player"><Avatar :username="room?.black_player_name || '等待'" /><div><strong>{{ room?.black_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-black">黑棋</span></strong><span :class="['ready-badge', room?.black_ready ? 'ready' : 'waiting']">{{ room?.black_ready ? "已准备" : "未准备" }}</span></div></div>
+            <button class="secondary-button" :disabled="!canSwitchTo('black')" @click="switchPosition('black')">{{ seatButtonLabel('black', Boolean(room?.black_player)) }}</button>
           </div>
           <div class="seat-row">
-            <div class="seat-player"><Avatar :username="room?.white_player_name || '等待'" /><div><strong>{{ room?.white_player_name || "等待好友加入" }}</strong><span class="seat-badge seat-badge-white">白棋</span></div></div>
-            <button v-if="myColor && !room?.white_player && room?.players === 1" class="secondary-button" @click="switchSeat('white')">换到白棋</button>
+            <div class="seat-player"><Avatar :username="room?.white_player_name || '等待'" /><div><strong>{{ room?.white_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-white">白棋</span></strong><span :class="['ready-badge', room?.white_ready ? 'ready' : 'waiting']">{{ room?.white_ready ? "已准备" : "未准备" }}</span></div></div>
+            <button class="secondary-button" :disabled="!canSwitchTo('white')" @click="switchPosition('white')">{{ seatButtonLabel('white', Boolean(room?.white_player)) }}</button>
+          </div>
+        </div>
+        <div class="spectator-panel">
+          <h2>观战席</h2>
+          <div class="spectator-list">
+            <div v-for="slot in spectatorSlots" :key="slot.seatNumber" class="spectator-row">
+              <div class="spectator-main"><span class="seat-badge">观众{{ slot.seatNumber }}</span><strong>{{ slot.user?.username || "空位" }}</strong></div>
+              <button class="secondary-button" :disabled="!canSwitchTo(`spectator${slot.seatNumber}`)" @click="switchPosition(`spectator${slot.seatNumber}`)">{{ seatButtonLabel(`spectator${slot.seatNumber}`, Boolean(slot.user)) }}</button>
+            </div>
           </div>
         </div>
         <div class="room-chat">

@@ -13,6 +13,7 @@ urlpatterns = [
     path("rooms/<int:room_id>/leave/", views.leave_room_view),
     path("rooms/<int:room_id>/state/", views.room_state),
     path("rooms/<int:room_id>/switch-seat/", views.switch_seat_view),
+    path("rooms/<int:room_id>/ready/", views.ready_view),
     path("rooms/<int:room_id>/move/", views.move_view),
     path("rooms/<int:room_id>/chat/", views.chat_view),
     path("solo/ai-move/", views.solo_ai_move),

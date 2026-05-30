@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { Lock, Plus, Unlock, UsersRound } from "lucide-vue-next";
+import { Lock, Plus, RefreshCw, Unlock, UsersRound } from "lucide-vue-next";
 import { api } from "../api";
 import AuthModal from "../components/AuthModal.vue";
 import Modal from "../components/Modal.vue";
@@ -11,18 +11,24 @@ import type { Room, RuleSet } from "../types";
 const router = useRouter();
 const rooms = ref<Room[]>([]);
 const error = ref("");
+const loading = ref(false);
 const authOpen = ref(false);
 const createOpen = ref(false);
 const joinRoom = ref<Room | null>(null);
 const password = ref("");
 const form = ref({ name: "好友对局", rule_set: "standard" as RuleSet, has_password: false, password: "" });
+let refreshTimer: number | null = null;
 
 async function load() {
   if (!isAuthenticated()) return;
+  loading.value = true;
   try {
     rooms.value = await api.rooms();
+    error.value = "";
   } catch (err) {
     error.value = err instanceof Error ? err.message : "房间列表加载失败";
+  } finally {
+    loading.value = false;
   }
 }
 
@@ -61,22 +67,46 @@ async function submitJoin() {
 }
 
 async function create() {
+  const name = form.value.name.trim();
+  if (rooms.value.some((room) => room.name.trim().toLowerCase() === name.toLowerCase())) {
+    error.value = "房间名重复";
+    createOpen.value = false;
+    return;
+  }
   try {
-    const room = await api.createRoom(form.value);
+    const room = await api.createRoom({ ...form.value, name });
     router.push(`/rooms/${room.id}`);
   } catch (err) {
     error.value = err instanceof Error ? err.message : "创建失败";
   }
 }
 
-onMounted(load);
+function roomFull(room: Room) {
+  return room.players >= room.max_players && room.spectators_count >= room.max_spectators;
+}
+
+function enterLabel(room: Room) {
+  if (roomFull(room)) return "已满";
+  return room.players >= room.max_players ? "观战" : "进入";
+}
+
+onMounted(() => {
+  void load();
+  refreshTimer = window.setInterval(load, 15000);
+});
+onUnmounted(() => {
+  if (refreshTimer !== null) window.clearInterval(refreshTimer);
+});
 </script>
 
 <template>
   <main class="page-shell">
     <header class="page-header">
       <div><RouterLink class="back-link" to="/">‹ 返回首页</RouterLink><h1>联机对战</h1><p>登录后可以创建或加入房间。</p></div>
-      <button v-if="isAuthenticated()" class="primary-button" type="button" @click="createOpen = true"><Plus :size="18" />创建房间</button>
+      <div v-if="isAuthenticated()" class="header-actions">
+        <button class="secondary-button" type="button" @click="load"><RefreshCw :size="18" :class="{ spinning: loading }" />刷新列表</button>
+        <button class="primary-button" type="button" @click="createOpen = true"><Plus :size="18" />创建房间</button>
+      </div>
     </header>
     <section v-if="!isAuthenticated()" class="locked-panel">
       <UsersRound :size="34" />
@@ -92,9 +122,10 @@ onMounted(load);
           <div class="room-meta">
             <span class="tag">{{ room.rule_set === "renju" ? "有禁手" : "无禁手" }}</span>
             <span class="tag"><Lock v-if="room.has_password" :size="14" /><Unlock v-else :size="14" />{{ room.has_password ? "需密码" : "无密码" }}</span>
-            <span class="tag">{{ room.players }}/{{ room.max_players }}</span>
+            <span class="tag">玩家 {{ room.players }}/{{ room.max_players }}</span>
+            <span class="tag">观众 {{ room.spectators_count }}/{{ room.max_spectators }}</span>
           </div>
-          <button class="secondary-button" :disabled="room.players >= room.max_players" type="button" @click="enter(room)">{{ room.players >= room.max_players ? "已满" : "进入" }}</button>
+          <button class="secondary-button" :disabled="roomFull(room)" type="button" @click="enter(room)">{{ enterLabel(room) }}</button>
         </article>
       </section>
     </template>

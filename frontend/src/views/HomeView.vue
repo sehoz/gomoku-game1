@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
-import { Bot, LogIn, Swords, UserRound, UsersRound, Trophy } from "lucide-vue-next";
+import { Bot, LogIn, RefreshCw, Swords, UserRound, UsersRound, Trophy } from "lucide-vue-next";
 import AuthModal from "../components/AuthModal.vue";
 import Avatar from "../components/Avatar.vue";
 import { authState, isAuthenticated } from "../stores/auth";
-import { presenceState } from "../stores/presence";
+import { presenceState, refreshPresence } from "../stores/presence";
 
 const router = useRouter();
 const authOpen = ref(false);
+const refreshingOnline = ref(false);
 
 function enterOnline() {
   if (!isAuthenticated()) {
@@ -16,6 +17,15 @@ function enterOnline() {
     return;
   }
   router.push("/rooms");
+}
+
+async function refreshOnline() {
+  refreshingOnline.value = true;
+  try {
+    await refreshPresence();
+  } finally {
+    refreshingOnline.value = false;
+  }
 }
 </script>
 
@@ -50,7 +60,12 @@ function enterOnline() {
     <section class="online-panel">
       <div class="section-title-row">
         <div><h2>在线列表</h2><p>{{ presenceState.connected ? "实时在线玩家" : "正在连接在线状态" }}</p></div>
-        <span class="online-count">{{ presenceState.users.length }}</span>
+        <div class="section-actions">
+          <span class="online-count">{{ presenceState.users.length }}</span>
+          <button class="icon-button" type="button" title="刷新在线列表" @click="refreshOnline">
+            <RefreshCw :size="17" :class="{ spinning: refreshingOnline }" />
+          </button>
+        </div>
       </div>
       <div v-if="presenceState.users.length === 0" class="empty-state">暂无登录玩家在线。</div>
       <div v-else class="online-list">

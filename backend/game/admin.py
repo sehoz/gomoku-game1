@@ -1,11 +1,11 @@
 from django.contrib import admin
 
-from .models import ChatMessage, Move, Room
+from .models import ChatMessage, Move, Room, SpectatorSeat
 
 
 @admin.register(Room)
 class RoomAdmin(admin.ModelAdmin):
-    list_display = ("name", "rule_set", "status", "players_count", "created_at")
+    list_display = ("name", "rule_set", "status", "players_count", "spectators_count", "created_at")
     search_fields = ("name",)
 
 
@@ -17,3 +17,8 @@ class MoveAdmin(admin.ModelAdmin):
 @admin.register(ChatMessage)
 class ChatMessageAdmin(admin.ModelAdmin):
     list_display = ("room", "sender_name", "text", "created_at")
+
+
+@admin.register(SpectatorSeat)
+class SpectatorSeatAdmin(admin.ModelAdmin):
+    list_display = ("room", "user", "seat_number", "joined_at")

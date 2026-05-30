@@ -67,6 +67,12 @@ export const api = {
   async switchSeat(id: number, target_color: StoneColor) {
     return request<Room>(`/rooms/${id}/switch-seat/`, { method: "POST", body: JSON.stringify({ target_color }) });
   },
+  async switchPosition(id: number, target_seat: string) {
+    return request<Room>(`/rooms/${id}/switch-seat/`, { method: "POST", body: JSON.stringify({ target_seat }) });
+  },
+  async readyRoom(id: number, ready: boolean) {
+    return request<Room>(`/rooms/${id}/ready/`, { method: "POST", body: JSON.stringify({ ready }) });
+  },
   async move(id: number, x: number, y: number) {
     return request(`/rooms/${id}/move/`, { method: "POST", body: JSON.stringify({ x, y }) });
   },

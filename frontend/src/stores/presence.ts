@@ -18,7 +18,7 @@ function clearReconnect() {
   reconnectTimer = null;
 }
 
-async function loadFallback() {
+export async function refreshPresence() {
   try {
     const data = await api.onlineUsers();
     presenceState.users = data.users;
@@ -47,7 +47,7 @@ export function connectPresence() {
   };
   socket.onerror = () => {
     presenceState.connected = false;
-    void loadFallback();
+    void refreshPresence();
   };
 }
 

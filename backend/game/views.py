@@ -19,7 +19,18 @@ from .serializers import (
     RoomStateSerializer,
     UserSerializer,
 )
-from .services import add_chat, join_room, leave_room, make_move, room_stones, switch_seat
+from .services import (
+    SeatSwitchNeedsConsent,
+    add_chat,
+    cleanup_idle_rooms,
+    ensure_room_member,
+    join_room,
+    leave_room,
+    make_move,
+    room_stones,
+    set_ready,
+    switch_position,
+)
 
 
 def token_response(user):
@@ -80,15 +91,19 @@ def online_users(request):
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def rooms(request):
+    cleanup_idle_rooms()
     if request.method == "GET":
         queryset = (
-            Room.objects.filter(Q(black_player__isnull=False) | Q(white_player__isnull=False))
+            Room.objects.filter(Q(black_player__isnull=False) | Q(white_player__isnull=False) | Q(spectators__isnull=False))
             .exclude(status=Room.STATUS_FINISHED)
             .select_related("black_player", "white_player")
+            .prefetch_related("spectators__user")
         )
         return Response(RoomSerializer(queryset.distinct(), many=True).data)
 
-    name = request.data.get("name") or "未命名房间"
+    name = (request.data.get("name") or "未命名房间").strip() or "未命名房间"
+    if Room.objects.exclude(status=Room.STATUS_FINISHED).filter(name__iexact=name).exists():
+        return Response({"detail": "房间名重复"}, status=status.HTTP_400_BAD_REQUEST)
     rule_set = request.data.get("rule_set", Room.RULE_STANDARD)
     if rule_set not in {Room.RULE_STANDARD, Room.RULE_RENJU}:
         return Response({"detail": "规则参数无效"}, status=status.HTTP_400_BAD_REQUEST)
@@ -126,11 +141,14 @@ def leave_room_view(request, room_id):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def room_state(request, room_id):
+    cleanup_idle_rooms()
     try:
         room = Room.objects.get(id=room_id)
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
-    if room.black_player_id != request.user.id and room.white_player_id != request.user.id:
+    try:
+        ensure_room_member(room, request.user)
+    except ValueError:
         return Response({"detail": "请先加入房间"}, status=status.HTTP_403_FORBIDDEN)
     data = {
         "room": room,
@@ -144,7 +162,25 @@ def room_state(request, room_id):
 @permission_classes([IsAuthenticated])
 def switch_seat_view(request, room_id):
     try:
-        room = switch_seat(Room.objects.get(id=room_id), request.user, request.data.get("target_color"))
+        room = switch_position(
+            Room.objects.get(id=room_id),
+            request.user,
+            request.data.get("target_seat") or request.data.get("target_color"),
+        )
+        return Response(RoomSerializer(room).data)
+    except Room.DoesNotExist:
+        return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
+    except SeatSwitchNeedsConsent as exc:
+        return Response({"detail": str(exc), "request": exc.request}, status=status.HTTP_409_CONFLICT)
+    except ValueError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def ready_view(request, room_id):
+    try:
+        room = set_ready(Room.objects.get(id=room_id), request.user, request.data.get("ready", True))
         return Response(RoomSerializer(room).data)
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)

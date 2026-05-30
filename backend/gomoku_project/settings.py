@@ -85,6 +85,7 @@ STORAGES = {
 }
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+ROOM_IDLE_MINUTES = int(os.environ.get("ROOM_IDLE_MINUTES", "5"))
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [

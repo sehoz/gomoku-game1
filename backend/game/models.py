@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.contrib.auth.hashers import check_password, make_password
 from django.db import models
+from django.utils import timezone
 
 
 class Room(models.Model):
@@ -42,6 +43,10 @@ class Room(models.Model):
     )
     winner = models.CharField(max_length=10, blank=True)
     max_players = models.PositiveSmallIntegerField(default=2)
+    max_spectators = models.PositiveSmallIntegerField(default=4)
+    black_ready = models.BooleanField(default=False)
+    white_ready = models.BooleanField(default=False)
+    last_activity_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
         ordering = ["-created_at"]
@@ -49,6 +54,14 @@ class Room(models.Model):
     @property
     def players_count(self):
         return int(bool(self.black_player_id)) + int(bool(self.white_player_id))
+
+    @property
+    def spectators_count(self):
+        return self.spectators.count() if self.pk else 0
+
+    @property
+    def occupants_count(self):
+        return self.players_count + self.spectators_count
 
     def set_password(self, raw_password):
         self.has_password = bool(raw_password)
@@ -60,12 +73,11 @@ class Room(models.Model):
         return check_password(raw_password or "", self.password_hash)
 
     def refresh_status(self):
-        count = self.players_count
-        if count == 0:
+        if self.occupants_count == 0:
             self.status = self.STATUS_FINISHED
         elif self.winner:
             self.status = self.STATUS_FINISHED
-        elif count == 2:
+        elif self.players_count == 2 and self.black_ready and self.white_ready:
             self.status = self.STATUS_PLAYING
         else:
             self.status = self.STATUS_WAITING
@@ -107,3 +119,17 @@ class ChatMessage(models.Model):
 
     class Meta:
         ordering = ["created_at"]
+
+
+class SpectatorSeat(models.Model):
+    room = models.ForeignKey(Room, related_name="spectators", on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="spectator_seats", on_delete=models.CASCADE)
+    seat_number = models.PositiveSmallIntegerField()
+    joined_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["seat_number"]
+        constraints = [
+            models.UniqueConstraint(fields=["room", "user"], name="unique_room_spectator_user"),
+            models.UniqueConstraint(fields=["room", "seat_number"], name="unique_room_spectator_seat"),
+        ]

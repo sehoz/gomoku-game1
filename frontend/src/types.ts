@@ -24,11 +24,23 @@ export interface Room {
   status: "waiting" | "playing" | "finished";
   players: number;
   max_players: number;
+  spectators_count: number;
+  max_spectators: number;
+  spectators: SpectatorSeat[];
   black_player: number | null;
   black_player_name: string | null;
+  black_ready: boolean;
   white_player: number | null;
   white_player_name: string | null;
+  white_ready: boolean;
   winner: string;
+}
+
+export interface SpectatorSeat {
+  user: number;
+  username: string;
+  seat_number: number;
+  stats: UserProfile["stats"];
 }
 
 export interface Move {

@@ -41,6 +41,8 @@ class LoginSerializer(serializers.Serializer):
 
 class RoomSerializer(serializers.ModelSerializer):
     players = serializers.SerializerMethodField()
+    spectators_count = serializers.SerializerMethodField()
+    spectators = serializers.SerializerMethodField()
     black_player_name = serializers.CharField(source="black_player.username", read_only=True)
     white_player_name = serializers.CharField(source="white_player.username", read_only=True)
 
@@ -55,16 +57,36 @@ class RoomSerializer(serializers.ModelSerializer):
             "status",
             "players",
             "max_players",
+            "spectators_count",
+            "max_spectators",
+            "spectators",
             "black_player",
             "black_player_name",
+            "black_ready",
             "white_player",
             "white_player_name",
+            "white_ready",
             "winner",
         )
         read_only_fields = ("id", "created_at", "status", "winner")
 
     def get_players(self, room):
         return room.players_count
+
+    def get_spectators_count(self, room):
+        return room.spectators_count
+
+    def get_spectators(self, room):
+        spectators = room.spectators.select_related("user").order_by("seat_number")
+        return [
+            {
+                "user": spectator.user_id,
+                "username": spectator.user.username,
+                "seat_number": spectator.seat_number,
+                "stats": UserSerializer(spectator.user).data["stats"],
+            }
+            for spectator in spectators
+        ]
 
 
 class MoveSerializer(serializers.ModelSerializer):
