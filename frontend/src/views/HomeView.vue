@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
-import { Bot, LogIn, Swords, UserRound, UsersRound } from "lucide-vue-next";
+import { Bot, LogIn, Swords, UserRound, UsersRound, Trophy } from "lucide-vue-next";
 import AuthModal from "../components/AuthModal.vue";
 import Avatar from "../components/Avatar.vue";
 import { authState, isAuthenticated } from "../stores/auth";
+import { presenceState } from "../stores/presence";
 
 const router = useRouter();
 const authOpen = ref(false);
@@ -46,10 +47,18 @@ function enterOnline() {
         <Swords :size="22" />
       </button>
     </section>
-    <section class="home-status">
-      <div><span class="status-label">当前身份</span><strong>{{ isAuthenticated() ? "已登录" : "游客" }}</strong></div>
-      <div><span class="status-label">单机</span><strong>已开放</strong></div>
-      <div><span class="status-label">联机</span><strong>{{ isAuthenticated() ? "已开放" : "需登录" }}</strong></div>
+    <section class="online-panel">
+      <div class="section-title-row">
+        <div><h2>在线列表</h2><p>{{ presenceState.connected ? "实时在线玩家" : "正在连接在线状态" }}</p></div>
+        <span class="online-count">{{ presenceState.users.length }}</span>
+      </div>
+      <div v-if="presenceState.users.length === 0" class="empty-state">暂无登录玩家在线。</div>
+      <div v-else class="online-list">
+        <div v-for="user in presenceState.users" :key="user.id" class="online-row">
+          <div class="online-user"><Avatar :username="user.username" /><div><strong>{{ user.username }}</strong><span>ID：{{ user.id }}</span></div></div>
+          <div class="online-stats"><span><Trophy :size="15" />{{ user.stats.wins }} 胜</span><span>胜率 {{ user.stats.winRate }}%</span></div>
+        </div>
+      </div>
     </section>
     <AuthModal v-if="authOpen" @close="authOpen = false" />
   </main>

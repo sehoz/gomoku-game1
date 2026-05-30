@@ -24,6 +24,10 @@ def ensure_room_member(room, user):
         raise ValueError("你不在该房间")
 
 
+def opponent_color(color):
+    return "white" if color == "black" else "black"
+
+
 @transaction.atomic
 def join_room(room, user, password=""):
     room = Room.objects.select_for_update().get(id=room.id)
@@ -114,6 +118,34 @@ def make_move(room, user, x, y):
         room.status = Room.STATUS_FINISHED
         room.save(update_fields=["status"])
     return room, result
+
+
+@transaction.atomic
+def undo_last_turn(room, requester):
+    room = Room.objects.select_for_update().get(id=room.id)
+    requester_color = user_color(room, requester)
+    if requester_color is None:
+        raise ValueError("你不在该房间")
+    moves = list(room.moves.select_for_update().order_by("-move_number")[:2])
+    if not moves:
+        raise ValueError("当前没有可以悔棋的落子")
+
+    delete_ids = []
+    latest = moves[0]
+    if latest.player_id == requester.id:
+        delete_ids.append(latest.id)
+    elif len(moves) >= 2 and moves[1].player_id == requester.id:
+        delete_ids.extend([latest.id, moves[1].id])
+    else:
+        raise ValueError("只能撤销你的上一步落子")
+
+    Move.objects.filter(id__in=delete_ids).delete()
+    if room.status == Room.STATUS_FINISHED:
+        room.status = Room.STATUS_PLAYING if room.players_count == 2 else Room.STATUS_WAITING
+    room.winner = ""
+    room.refresh_status()
+    room.save(update_fields=["status", "winner"])
+    return room, len(delete_ids)
 
 
 def add_chat(room, user, text):

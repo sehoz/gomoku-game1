@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { RotateCcw } from "lucide-vue-next";
+import { RotateCcw, Undo2 } from "lucide-vue-next";
 import { api } from "../api";
 import GameBoard from "../components/GameBoard.vue";
 import { evaluateMove, nextTurn, opponent } from "../rules";
@@ -14,6 +14,8 @@ const playerColor = ref<StoneColor>("black");
 const status = ref<GameStatus>("playing");
 const message = ref("黑棋先手，请在交点处落子。");
 const thinking = ref(false);
+const lastPlayerMoveIndex = ref<number | null>(null);
+const aiRequestId = ref(0);
 const turn = computed(() => nextTurn(stones.value));
 const aiColor = computed(() => opponent(playerColor.value));
 const playerTurn = computed(() => status.value === "playing" && turn.value === playerColor.value);
@@ -58,6 +60,8 @@ function applyAiMove(move: Move, result: { status: string; winner?: StoneColor; 
 async function aiPlay() {
   if (status.value !== "playing" || turn.value !== aiColor.value || thinking.value) return;
   thinking.value = true;
+  const requestId = aiRequestId.value + 1;
+  aiRequestId.value = requestId;
   try {
     const data = await api.soloAiMove({
       stones: stones.value,
@@ -66,6 +70,7 @@ async function aiPlay() {
       rule_set: ruleSet.value,
       ai_level: aiLevel.value,
     });
+    if (requestId !== aiRequestId.value) return;
     if (!data.move) {
       status.value = "draw";
       message.value = "平局。";
@@ -73,6 +78,7 @@ async function aiPlay() {
     }
     applyAiMove({ x: data.move.x, y: data.move.y, color: aiColor.value }, data.result);
   } catch (err) {
+    if (requestId !== aiRequestId.value) return;
     const fallback = localRandomAiMove();
     if (!fallback) {
       status.value = "draw";
@@ -84,7 +90,7 @@ async function aiPlay() {
       message.value = "AI 已使用本地随机落子。";
     }
   } finally {
-    thinking.value = false;
+    if (requestId === aiRequestId.value) thinking.value = false;
   }
 }
 
@@ -97,6 +103,7 @@ function play(x: number, y: number) {
     message.value = result.reason || "不能落子";
     return;
   }
+  lastPlayerMoveIndex.value = stones.value.length;
   stones.value.push({ x, y, color: playerColor.value });
   playStoneSound();
   status.value = result.status;
@@ -110,9 +117,25 @@ function play(x: number, y: number) {
 }
 
 function reset() {
+  aiRequestId.value += 1;
   stones.value = [];
   status.value = "playing";
+  thinking.value = false;
+  lastPlayerMoveIndex.value = null;
   message.value = "黑棋先手，请在交点处落子。";
+}
+
+function undo() {
+  if (lastPlayerMoveIndex.value === null) {
+    message.value = "当前没有可以悔棋的落子。";
+    return;
+  }
+  aiRequestId.value += 1;
+  thinking.value = false;
+  stones.value.splice(lastPlayerMoveIndex.value);
+  lastPlayerMoveIndex.value = null;
+  status.value = "playing";
+  message.value = "已撤销你的上一步落子。";
 }
 </script>
 
@@ -120,7 +143,10 @@ function reset() {
   <main class="page-shell">
     <header class="page-header">
       <div><RouterLink class="back-link" to="/">‹ 返回首页</RouterLink><h1>单机对战</h1><p>支持无禁手/有禁手规则、AI 强度和玩家棋色。</p></div>
-      <button class="secondary-button" type="button" @click="reset"><RotateCcw :size="18" />重新开始</button>
+      <div class="header-actions">
+        <button class="secondary-button" type="button" @click="undo"><Undo2 :size="18" />悔棋</button>
+        <button class="secondary-button" type="button" @click="reset"><RotateCcw :size="18" />重新开始</button>
+      </div>
     </header>
     <section class="game-layout">
       <div class="board-panel">

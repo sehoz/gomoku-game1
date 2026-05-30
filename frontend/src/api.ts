@@ -1,4 +1,4 @@
-import type { AiLevel, Move, Room, RoomState, RuleSet, StoneColor, UserProfile } from "./types";
+import type { AiLevel, Move, OnlineUser, Room, RoomState, RuleSet, StoneColor, UserProfile } from "./types";
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 const wsBase = import.meta.env.VITE_WS_BASE_URL || "ws://localhost:8000/ws";
@@ -46,6 +46,9 @@ export const api = {
   async me() {
     return request<{ user: UserProfile | null }>("/auth/me/");
   },
+  async onlineUsers() {
+    return request<{ users: OnlineUser[] }>("/online/");
+  },
   async rooms() {
     return request<Room[]>("/rooms/");
   },
@@ -86,4 +89,9 @@ export const api = {
 
 export function roomSocketUrl(roomId: number) {
   return `${wsBase}/rooms/${roomId}/?token=${encodeURIComponent(token())}`;
+}
+
+export function presenceSocketUrl() {
+  const query = token() ? `?token=${encodeURIComponent(token())}` : "";
+  return `${wsBase}/presence/${query}`;
 }

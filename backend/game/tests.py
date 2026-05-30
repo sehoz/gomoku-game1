@@ -2,9 +2,10 @@ from django.contrib.auth.models import User
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from .ai import choose_ai_move
 from .models import Room
 from .rules import evaluate_move
-from .services import leave_room
+from .services import leave_room, make_move, undo_last_turn
 
 
 class AuthEndpointTests(TestCase):
@@ -58,6 +59,22 @@ class RuleEngineTests(TestCase):
         self.assertTrue(result.forbidden)
         self.assertEqual(result.winner, "white")
 
+
+class AiTests(TestCase):
+    def test_ai_takes_immediate_win(self):
+        stones = [{"x": x, "y": 7, "color": "white"} for x in range(4)]
+
+        move = choose_ai_move(stones, 15, "white", Room.RULE_STANDARD, "hard")
+
+        self.assertEqual(move, {"x": 4, "y": 7})
+
+    def test_ai_blocks_opponent_immediate_win(self):
+        stones = [{"x": x, "y": 7, "color": "black"} for x in range(4)]
+
+        move = choose_ai_move(stones, 15, "white", Room.RULE_STANDARD, "hard")
+
+        self.assertEqual(move, {"x": 4, "y": 7})
+
     def test_renju_allows_exact_five_for_black(self):
         stones = [{"x": x, "y": 7, "color": "black"} for x in range(4)]
         result = evaluate_move(stones, 4, 7, "black", Room.RULE_RENJU)
@@ -105,3 +122,30 @@ class RoomLifecycleTests(TestCase):
 
         self.assertIsNone(result)
         self.assertFalse(Room.objects.filter(id=room.id).exists())
+
+    def test_undo_latest_own_move_removes_one_stone(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = Room.objects.create(name="测试房间", black_player=black, white_player=white)
+        room.refresh_status()
+        room.save()
+        make_move(room, black, 7, 7)
+
+        _room, removed = undo_last_turn(room, black)
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(room.moves.count(), 0)
+
+    def test_undo_after_opponent_response_removes_two_stones(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = Room.objects.create(name="测试房间", black_player=black, white_player=white)
+        room.refresh_status()
+        room.save()
+        make_move(room, black, 7, 7)
+        make_move(room, white, 7, 8)
+
+        _room, removed = undo_last_turn(room, black)
+
+        self.assertEqual(removed, 2)
+        self.assertEqual(room.moves.count(), 0)

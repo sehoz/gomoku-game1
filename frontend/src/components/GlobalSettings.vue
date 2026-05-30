@@ -20,7 +20,7 @@ function onVolumeChange(event: Event) {
 </script>
 
 <template>
-  <button class="global-settings-button" type="button" @click="open = true"><Settings :size="20" /></button>
+  <button class="global-settings-button" type="button" @click="open = true"><Settings :size="20" /><span>设置</span></button>
   <Modal v-if="open" title="全局设置" @close="open = false">
     <div class="settings-form">
       <label class="switch-row"><span><Music :size="18" />背景音乐</span><input :checked="settingsState.bgm" type="checkbox" @change="onBgmChange" /></label>

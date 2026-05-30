@@ -54,3 +54,5 @@ export interface RoomState {
   moves: Move[];
   messages: ChatMessage[];
 }
+
+export type OnlineUser = UserProfile;

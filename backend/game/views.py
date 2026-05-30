@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from .ai import choose_ai_move
 from .models import ChatMessage, Room
+from .presence import online_users_payload
 from .rules import evaluate_move
 from .serializers import (
     ChatMessageSerializer,
@@ -68,6 +69,12 @@ def me(request):
     if not request.user.is_authenticated:
         return Response({"user": None})
     return Response({"user": UserSerializer(request.user).data})
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def online_users(request):
+    return Response({"users": online_users_payload()})
 
 
 @api_view(["GET", "POST"])

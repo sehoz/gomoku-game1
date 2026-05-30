@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { LogOut, MessageSquareText, Send } from "lucide-vue-next";
+import { Check, LogOut, MessageSquareText, Send, Undo2, X } from "lucide-vue-next";
 import { api, roomSocketUrl } from "../api";
 import Avatar from "../components/Avatar.vue";
 import GameBoard from "../components/GameBoard.vue";
@@ -18,6 +18,8 @@ const moves = ref<Move[]>([]);
 const messages = ref<ChatMessage[]>([]);
 const draft = ref("");
 const notice = ref("正在加载房间。");
+const undoRequest = ref<{ user_id: number; username: string; color: StoneColor } | null>(null);
+const ownUndoPending = ref(false);
 let socket: WebSocket | null = null;
 
 const turn = computed(() => nextTurn(moves.value));
@@ -67,6 +69,20 @@ async function load() {
     const data = JSON.parse(event.data);
     if (data.type === "state") applyState(data.state);
     if (data.type === "error") notice.value = data.detail;
+    if (data.type === "undo_request") {
+      if (data.request.user_id === authState.user?.id) {
+        ownUndoPending.value = true;
+        notice.value = "悔棋申请已发送，等待对方处理。";
+      } else {
+        undoRequest.value = data.request;
+        notice.value = `${data.request.username} 申请悔棋。`;
+      }
+    }
+    if (data.type === "undo_result") {
+      ownUndoPending.value = false;
+      undoRequest.value = null;
+      notice.value = data.detail;
+    }
     if (data.type === "closed") {
       notice.value = "房间已解散。";
       router.push("/rooms");
@@ -110,6 +126,26 @@ async function switchSeat(color: StoneColor) {
   }
 }
 
+function requestUndo() {
+  if (!sendSocket({ type: "undo_request" })) {
+    notice.value = "连接已断开，暂时不能申请悔棋。";
+  }
+}
+
+function acceptUndo() {
+  if (!sendSocket({ type: "undo_accept" })) {
+    notice.value = "连接已断开，暂时不能处理悔棋申请。";
+  }
+}
+
+function rejectUndo() {
+  if (!sendSocket({ type: "undo_reject" })) {
+    notice.value = "连接已断开，暂时不能处理悔棋申请。";
+    return;
+  }
+  undoRequest.value = null;
+}
+
 async function leave() {
   if (sendSocket({ type: "leave" })) {
     window.setTimeout(() => {
@@ -131,7 +167,7 @@ onUnmounted(() => socket?.close());
 
 <template>
   <main class="page-shell">
-    <header class="page-header"><div><button class="link-button" type="button" @click="leave">‹ 返回房间</button><h1>{{ room?.name || "房间" }}</h1><p>黑棋在上，白棋在下；两人就位后开始。</p></div><button class="secondary-button" type="button" @click="leave"><LogOut :size="18" />离开房间</button></header>
+    <header class="page-header"><div><button class="link-button" type="button" @click="leave">‹ 返回房间</button><h1>{{ room?.name || "房间" }}</h1><p>黑棋在上，白棋在下；两人就位后开始。</p></div><div class="header-actions"><button class="secondary-button" :disabled="!myColor || ownUndoPending" type="button" @click="requestUndo"><Undo2 :size="18" />{{ ownUndoPending ? "等待回应" : "申请悔棋" }}</button><button class="secondary-button" type="button" @click="leave"><LogOut :size="18" />离开房间</button></div></header>
     <section class="game-layout">
       <div class="board-panel">
         <div class="board-toolbar">
@@ -141,6 +177,14 @@ onUnmounted(() => socket?.close());
         </div>
         <GameBoard :stones="moves" :interactive="canMove" @play="play" />
         <div class="game-message">{{ notice }}</div>
+        <div v-if="undoRequest" class="undo-request-panel">
+          <strong>{{ undoRequest.username }} 申请悔棋</strong>
+          <span>同意后将按规则撤销对方上一步落子。</span>
+          <div class="inline-actions">
+            <button class="primary-button" type="button" @click="acceptUndo"><Check :size="16" />同意</button>
+            <button class="secondary-button" type="button" @click="rejectUndo"><X :size="16" />拒绝</button>
+          </div>
+        </div>
       </div>
       <aside class="settings-panel">
         <h2>玩家</h2>
