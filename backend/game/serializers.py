@@ -2,7 +2,7 @@ from django.contrib.auth.models import User
 from django.db.models import Q
 from rest_framework import serializers
 
-from .models import ChatMessage, GameSession, Move, Room
+from .models import ChatMessage, GameSession, Move, Room, RoomInvitation
 from .services import decode_pending_request, displayed_time_left
 
 
@@ -57,6 +57,7 @@ class RoomSerializer(serializers.ModelSerializer):
     pending_seat_switch_request = serializers.SerializerMethodField()
     black_player_name = serializers.CharField(source="black_player.username", read_only=True)
     white_player_name = serializers.CharField(source="white_player.username", read_only=True)
+    host_name = serializers.CharField(source="host.username", read_only=True)
 
     class Meta:
         model = Room
@@ -67,6 +68,8 @@ class RoomSerializer(serializers.ModelSerializer):
             "has_password",
             "rule_set",
             "status",
+            "host",
+            "host_name",
             "current_game",
             "players",
             "max_players",
@@ -157,6 +160,36 @@ class MoveSerializer(serializers.ModelSerializer):
     class Meta:
         model = Move
         fields = ("id", "move_number", "x", "y", "color", "player", "created_at")
+
+
+class GameReplaySerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    room_name = serializers.CharField()
+    rule_set = serializers.CharField()
+    black_player = serializers.DictField()
+    white_player = serializers.DictField()
+    winner = serializers.CharField()
+    end_reason = serializers.CharField()
+    started_at = serializers.DateTimeField(allow_null=True)
+    ended_at = serializers.DateTimeField(allow_null=True)
+    moves = MoveSerializer(many=True)
+
+
+class LeaderboardEntrySerializer(serializers.Serializer):
+    rank = serializers.IntegerField()
+    user = serializers.DictField()
+    wins = serializers.IntegerField()
+    totalGames = serializers.IntegerField()
+    winRate = serializers.IntegerField()
+
+
+class RoomInvitationSerializer(serializers.ModelSerializer):
+    room_name = serializers.CharField(source="room.name", read_only=True)
+    inviter_username = serializers.CharField(source="inviter.username", read_only=True)
+
+    class Meta:
+        model = RoomInvitation
+        fields = ("id", "room", "room_name", "inviter", "inviter_username", "status", "created_at")
 
 
 class ChatMessageSerializer(serializers.ModelSerializer):

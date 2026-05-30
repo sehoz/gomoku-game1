@@ -42,6 +42,13 @@ class Room(models.Model):
         on_delete=models.SET_NULL,
     )
     winner = models.CharField(max_length=10, blank=True)
+    host = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        related_name="hosted_rooms",
+        on_delete=models.SET_NULL,
+    )
     current_game = models.ForeignKey(
         "GameSession",
         null=True,
@@ -55,6 +62,8 @@ class Room(models.Model):
     total_time_seconds = models.PositiveIntegerField(default=600)
     black_ready = models.BooleanField(default=False)
     white_ready = models.BooleanField(default=False)
+    black_joined_at = models.DateTimeField(null=True, blank=True)
+    white_joined_at = models.DateTimeField(null=True, blank=True)
     black_last_seen_at = models.DateTimeField(null=True, blank=True)
     white_last_seen_at = models.DateTimeField(null=True, blank=True)
     last_activity_at = models.DateTimeField(default=timezone.now)
@@ -187,3 +196,24 @@ class SpectatorSeat(models.Model):
             models.UniqueConstraint(fields=["room", "user"], name="unique_room_spectator_user"),
             models.UniqueConstraint(fields=["room", "seat_number"], name="unique_room_spectator_seat"),
         ]
+
+
+class RoomInvitation(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_ACCEPTED = "accepted"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "待处理"),
+        (STATUS_ACCEPTED, "已接受"),
+        (STATUS_REJECTED, "已拒绝"),
+    )
+
+    room = models.ForeignKey(Room, related_name="invitations", on_delete=models.CASCADE)
+    inviter = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="sent_room_invitations", on_delete=models.CASCADE)
+    invitee = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="received_room_invitations", on_delete=models.CASCADE)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    created_at = models.DateTimeField(auto_now_add=True)
+    responded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]

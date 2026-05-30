@@ -78,8 +78,8 @@ export function playStoneSound() {
 
 export function playChatSound() {
   if (!settingsState.chatSound) return;
-  playTone(740, 0.055, 0.12);
-  window.setTimeout(() => playTone(920, 0.07, 0.1), 45);
+  playTone(680, 0.1, 0.34);
+  window.setTimeout(() => playTone(940, 0.12, 0.28), 60);
 }
 
 export function startBgm() {

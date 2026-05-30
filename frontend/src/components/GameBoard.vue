@@ -2,7 +2,7 @@
 import { computed } from "vue";
 import type { Move } from "../types";
 
-const props = defineProps<{ size?: number; stones: Move[]; interactive?: boolean }>();
+const props = defineProps<{ size?: number; stones: Move[]; interactive?: boolean; showMoveNumbers?: boolean }>();
 const emit = defineEmits<{ play: [x: number, y: number] }>();
 const boardSize = computed(() => props.size || 15);
 const step = computed(() => 100 / (boardSize.value - 1));
@@ -24,6 +24,12 @@ function stoneAt(x: number, y: number) {
 function isLastStone(x: number, y: number) {
   const last = props.stones[props.stones.length - 1];
   return Boolean(last && last.x === x && last.y === y);
+}
+
+function moveNumber(x: number, y: number) {
+  const index = props.stones.findIndex((stone) => stone.x === x && stone.y === y);
+  if (index < 0) return "";
+  return props.stones[index].move_number || index + 1;
 }
 </script>
 
@@ -50,10 +56,11 @@ function isLastStone(x: number, y: number) {
           v-if="stoneAt((index - 1) % boardSize, Math.floor((index - 1) / boardSize))"
           :class="[
             'stone',
+            { 'stone-numbered': showMoveNumbers },
             `stone-${stoneAt((index - 1) % boardSize, Math.floor((index - 1) / boardSize))?.color}`,
             { 'stone-last': isLastStone((index - 1) % boardSize, Math.floor((index - 1) / boardSize)) },
           ]"
-        />
+        >{{ showMoveNumbers ? moveNumber((index - 1) % boardSize, Math.floor((index - 1) / boardSize)) : "" }}</span>
       </button>
     </div>
   </div>

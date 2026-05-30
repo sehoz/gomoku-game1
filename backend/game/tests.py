@@ -6,18 +6,22 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from .ai import choose_ai_move
-from .models import GameSession, Room, SpectatorSeat
+from .models import GameSession, Move, Room, SpectatorSeat
 from .rules import evaluate_move
 from .services import (
     SeatSwitchNeedsConsent,
     accept_seat_switch,
     add_chat,
     cleanup_idle_rooms,
+    create_room_invitation,
     decode_pending_request,
     join_room,
+    kick_user,
     leave_room,
     make_move,
+    respond_room_invitation,
     set_ready,
+    surrender,
     switch_position,
     undo_last_turn,
 )
@@ -233,6 +237,134 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["move_time_seconds"], 60)
         self.assertEqual(response.data["total_time_seconds"], 900)
+
+    def test_create_room_accepts_short_room_password(self):
+        owner = User.objects.create_user(username="owner", password="gomoku123")
+        client = APIClient()
+        client.force_authenticate(owner)
+
+        response = client.post(
+            "/api/rooms/",
+            {"name": "短口令房", "rule_set": "standard", "has_password": True, "password": "1"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.data["has_password"])
+
+    def test_room_state_polling_refreshes_player_seen_time(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        old_seen = timezone.now() - timedelta(minutes=8)
+        room = Room.objects.create(
+            name="测试房间",
+            black_player=black,
+            white_player=white,
+            black_last_seen_at=old_seen,
+            white_last_seen_at=old_seen,
+        )
+        client = APIClient()
+        client.force_authenticate(black)
+
+        response = client.get(f"/api/rooms/{room.id}/state/")
+
+        self.assertEqual(response.status_code, 200)
+        room.refresh_from_db()
+        self.assertGreater(room.black_last_seen_at, old_seen)
+
+    def test_host_transfers_to_next_joined_player_when_host_leaves(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = Room.objects.create(
+            name="测试房间",
+            black_player=black,
+            white_player=white,
+            host=black,
+            black_joined_at=timezone.now() - timedelta(minutes=2),
+            white_joined_at=timezone.now() - timedelta(minutes=1),
+        )
+
+        result = leave_room(room, black)
+
+        self.assertIsNotNone(result)
+        result.refresh_from_db()
+        self.assertEqual(result.host, white)
+
+    def test_host_can_kick_room_member(self):
+        host = User.objects.create_user(username="host", password="gomoku123")
+        target = User.objects.create_user(username="target", password="gomoku123")
+        room = Room.objects.create(name="测试房间", black_player=host, white_player=target, host=host)
+
+        result = kick_user(room, host, target.id)
+
+        self.assertIsNotNone(result)
+        result.refresh_from_db()
+        self.assertIsNone(result.white_player)
+
+    def test_invitation_accept_joins_room(self):
+        host = User.objects.create_user(username="host", password="gomoku123")
+        invitee = User.objects.create_user(username="invitee", password="gomoku123")
+        room = Room.objects.create(name="测试房间", black_player=host, host=host)
+        invitation = create_room_invitation(room, host, invitee)
+
+        joined_room, handled = respond_room_invitation(invitation, invitee, True)
+
+        self.assertEqual(handled.status, "accepted")
+        self.assertEqual(joined_room.white_player, invitee)
+
+    def test_surrender_finishes_active_game(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = self.playable_room(black, white)
+        make_move(room, black, 7, 7)
+
+        result = surrender(room, white)
+
+        result.refresh_from_db()
+        game = result.current_game
+        self.assertEqual(result.status, Room.STATUS_WAITING)
+        self.assertEqual(game.status, GameSession.STATUS_FINISHED)
+        self.assertEqual(game.winner, "black")
+        self.assertEqual(game.end_reason, "surrender")
+
+    def test_leaderboard_orders_by_wins(self):
+        alice = User.objects.create_user(username="alice", password="gomoku123")
+        bob = User.objects.create_user(username="bob", password="gomoku123")
+        game = GameSession.objects.create(
+            room_name="测试房间",
+            black_player=alice,
+            white_player=bob,
+            status=GameSession.STATUS_FINISHED,
+            winner="black",
+            ended_at=timezone.now(),
+        )
+        Move.objects.create(game=game, player=alice, move_number=1, x=7, y=7, color="black")
+
+        response = APIClient().get("/api/leaderboard/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["entries"][0]["user"]["username"], "alice")
+        self.assertEqual(response.data["entries"][0]["wins"], 1)
+
+    def test_match_detail_returns_replay_moves(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        game = GameSession.objects.create(
+            room_name="测试房间",
+            black_player=black,
+            white_player=white,
+            status=GameSession.STATUS_FINISHED,
+            winner="black",
+            ended_at=timezone.now(),
+        )
+        Move.objects.create(game=game, player=black, move_number=1, x=7, y=7, color="black")
+        client = APIClient()
+        client.force_authenticate(black)
+
+        response = client.get(f"/api/profile/matches/{game.id}/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["moves"][0]["move_number"], 1)
 
     def test_third_joiner_becomes_spectator_and_chat_has_role_suffix(self):
         black = User.objects.create_user(username="black", password="gomoku123")

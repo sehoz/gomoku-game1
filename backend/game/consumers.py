@@ -27,7 +27,6 @@ from .services import (
     store_pending_seat_switch,
     switch_position,
     touch_room,
-    user_color,
 )
 
 ROOM_CONNECTIONS = {}
@@ -113,11 +112,6 @@ def create_chat(room_id, user, text):
 @sync_to_async
 def create_move(room_id, user, x, y):
     room = Room.objects.get(id=room_id)
-    color = user_color(room, user)
-    if color == "black" and room.white_player_id and not is_connected(room_id, room.white_player_id):
-        raise ValueError("白棋已离线，等待对方重连或超时结束")
-    if color == "white" and room.black_player_id and not is_connected(room_id, room.black_player_id):
-        raise ValueError("黑棋已离线，等待对方重连或超时结束")
     room, result = make_move(room, user, x, y)
     return result.__dict__
 

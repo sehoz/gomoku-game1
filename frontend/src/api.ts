@@ -1,4 +1,19 @@
-import type { AiLevel, MatchRecord, Move, OnlineUser, Room, RoomState, RuleSet, SeatSwitchRequest, StoneColor, UndoRequest, UserProfile } from "./types";
+import type {
+  AiLevel,
+  LeaderboardEntry,
+  MatchRecord,
+  MatchReplay,
+  Move,
+  OnlineUser,
+  Room,
+  RoomInvitation,
+  RoomState,
+  RuleSet,
+  SeatSwitchRequest,
+  StoneColor,
+  UndoRequest,
+  UserProfile,
+} from "./types";
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 const wsBase = import.meta.env.VITE_WS_BASE_URL || "ws://localhost:8000/ws";
@@ -52,8 +67,23 @@ export const api = {
   async roomCount() {
     return request<{ count: number }>("/rooms/count/");
   },
+  async leaderboard() {
+    return request<{ entries: LeaderboardEntry[] }>("/leaderboard/");
+  },
   async matchHistory() {
     return request<{ records: MatchRecord[] }>("/profile/matches/");
+  },
+  async matchReplay(id: number) {
+    return request<MatchReplay>(`/profile/matches/${id}/`);
+  },
+  async invitations() {
+    return request<{ invitations: RoomInvitation[] }>("/invitations/");
+  },
+  async respondInvitation(id: number, accepted: boolean) {
+    return request<{ invitation: RoomInvitation; room: Room | null }>(`/invitations/${id}/respond/`, {
+      method: "POST",
+      body: JSON.stringify({ accepted }),
+    });
   },
   async rooms() {
     return request<Room[]>("/rooms/");
@@ -66,6 +96,12 @@ export const api = {
   },
   async leaveRoom(id: number) {
     return request<{ room: Room | null }>(`/rooms/${id}/leave/`, { method: "POST" });
+  },
+  async kickRoomUser(id: number, user_id: number) {
+    return request<{ room: Room | null }>(`/rooms/${id}/kick/`, { method: "POST", body: JSON.stringify({ user_id }) });
+  },
+  async inviteRoomUser(id: number, user_id: number) {
+    return request<{ invitation: RoomInvitation }>(`/rooms/${id}/invite/`, { method: "POST", body: JSON.stringify({ user_id }) });
   },
   async roomState(id: number) {
     return request<RoomState>(`/rooms/${id}/state/`);
@@ -81,6 +117,9 @@ export const api = {
   },
   async move(id: number, x: number, y: number) {
     return request(`/rooms/${id}/move/`, { method: "POST", body: JSON.stringify({ x, y }) });
+  },
+  async surrender(id: number) {
+    return request<Room>(`/rooms/${id}/surrender/`, { method: "POST" });
   },
   async chat(id: number, text: string) {
     return request(`/rooms/${id}/chat/`, { method: "POST", body: JSON.stringify({ text }) });

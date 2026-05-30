@@ -1,15 +1,21 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
-import { BadgeCheck, Clock3, LogIn, LogOut, Trophy } from "lucide-vue-next";
+import { computed, onMounted, ref } from "vue";
+import { BadgeCheck, ChevronLeft, ChevronRight, Clock3, LogIn, LogOut, RotateCcw, Trophy } from "lucide-vue-next";
 import { api } from "../api";
 import AuthModal from "../components/AuthModal.vue";
 import Avatar from "../components/Avatar.vue";
+import GameBoard from "../components/GameBoard.vue";
+import Modal from "../components/Modal.vue";
 import { authState, isAuthenticated, logout } from "../stores/auth";
-import type { MatchRecord } from "../types";
+import type { MatchRecord, MatchReplay } from "../types";
 
 const authOpen = ref(false);
 const records = ref<MatchRecord[]>([]);
 const historyError = ref("");
+const replay = ref<MatchReplay | null>(null);
+const replayStep = ref(0);
+const replayError = ref("");
+const replayStones = computed(() => replay.value?.moves.slice(0, replayStep.value) || []);
 
 function resultLabel(record: MatchRecord) {
   if (record.result === "win") return "胜";
@@ -35,6 +41,26 @@ async function loadHistory() {
   } catch (err) {
     historyError.value = err instanceof Error ? err.message : "对局记录加载失败";
   }
+}
+
+async function openReplay(record: MatchRecord) {
+  replayError.value = "";
+  try {
+    replay.value = await api.matchReplay(record.id);
+    replayStep.value = 0;
+  } catch (err) {
+    replayError.value = err instanceof Error ? err.message : "棋谱加载失败";
+  }
+}
+
+function setReplayStep(step: number) {
+  if (!replay.value) return;
+  replayStep.value = Math.max(0, Math.min(replay.value.moves.length, step));
+}
+
+function onReplaySlider(event: Event) {
+  const target = event.target as HTMLInputElement | null;
+  setReplayStep(Number(target?.value || 0));
 }
 
 onMounted(loadHistory);
@@ -64,11 +90,32 @@ onMounted(loadHistory);
           <article v-for="record in records" :key="record.id" class="history-row">
             <div><strong>{{ record.room_name }}</strong><span>{{ colorLabel(record.color) }} · 对手：{{ record.opponent.username }}</span></div>
             <div><span>开始：{{ formatTime(record.started_at) }}</span><span>结束：{{ formatTime(record.ended_at) }}</span></div>
-            <span :class="['result-badge', record.result]">{{ resultLabel(record) }}</span>
+            <div class="inline-actions"><span :class="['result-badge', record.result]">{{ resultLabel(record) }}</span><button class="secondary-button" type="button" @click="openReplay(record)">查看棋谱</button></div>
           </article>
         </div>
       </section>
     </section>
+    <div v-if="replayError" class="game-message warning">{{ replayError }}</div>
+    <Modal v-if="replay" title="棋谱复盘" @close="replay = null">
+      <div class="modal-form replay-panel">
+        <div>
+          <h2>{{ replay.room_name }}</h2>
+          <p>{{ replay.black_player.username }} 执黑，{{ replay.white_player.username }} 执白。</p>
+        </div>
+        <div class="replay-meta">
+          <span>第 {{ replayStep }} / {{ replay.moves.length }} 手</span>
+          <span>结果：{{ replay.winner === "black" ? "黑棋胜" : replay.winner === "white" ? "白棋胜" : "平局" }}</span>
+        </div>
+        <GameBoard :stones="replayStones" :interactive="false" show-move-numbers />
+        <div class="replay-controls">
+          <button class="secondary-button" type="button" @click="setReplayStep(0)"><RotateCcw :size="16" />开头</button>
+          <button class="secondary-button" type="button" @click="setReplayStep(replayStep - 1)"><ChevronLeft :size="16" />上一步</button>
+          <button class="secondary-button" type="button" @click="setReplayStep(replayStep + 1)">下一步<ChevronRight :size="16" /></button>
+          <button class="secondary-button" type="button" @click="setReplayStep(replay.moves.length)">末尾</button>
+          <input :value="replayStep" type="range" min="0" :max="replay.moves.length" @input="onReplaySlider" />
+        </div>
+      </div>
+    </Modal>
     <AuthModal v-if="authOpen" @close="authOpen = false" />
   </main>
 </template>

@@ -23,6 +23,8 @@ export interface Room {
   has_password: boolean;
   rule_set: RuleSet;
   status: "waiting" | "playing" | "finished";
+  host: number | null;
+  host_name: string | null;
   current_game: CurrentGame | null;
   players: number;
   max_players: number;
@@ -119,4 +121,35 @@ export interface MatchRecord {
   ended_at: string | null;
   end_reason: string;
   moves_count: number;
+}
+
+export interface MatchReplay {
+  id: number;
+  room_name: string;
+  rule_set: RuleSet;
+  black_player: { id: number | null; username: string };
+  white_player: { id: number | null; username: string };
+  winner: string;
+  end_reason: string;
+  started_at: string | null;
+  ended_at: string | null;
+  moves: Move[];
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  user: { id: number; username: string };
+  wins: number;
+  totalGames: number;
+  winRate: number;
+}
+
+export interface RoomInvitation {
+  id: number;
+  room: number;
+  room_name: string;
+  inviter: number;
+  inviter_username: string;
+  status: "pending" | "accepted" | "rejected";
+  created_at: string;
 }

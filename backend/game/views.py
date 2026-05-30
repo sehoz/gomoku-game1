@@ -3,6 +3,7 @@ from channels.layers import get_channel_layer
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes
@@ -10,14 +11,17 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from .ai import choose_ai_move
-from .models import ChatMessage, GameSession, Room
+from .models import ChatMessage, GameSession, Room, RoomInvitation
 from .presence import online_users_payload
 from .rules import evaluate_move
 from .serializers import (
     ChatMessageSerializer,
+    GameReplaySerializer,
+    LeaderboardEntrySerializer,
     LoginSerializer,
     MatchRecordSerializer,
     RegisterSerializer,
+    RoomInvitationSerializer,
     RoomSerializer,
     RoomStateSerializer,
     UserSerializer,
@@ -28,18 +32,24 @@ from .services import (
     add_chat,
     cleanup_idle_rooms,
     ensure_room_member,
+    ensure_room_host,
     finish_if_turn_timed_out,
+    create_room_invitation,
     join_room,
+    kick_user,
     leave_room,
+    mark_room_seen,
     make_move,
     accept_pending_seat_switch,
     accept_pending_undo,
     reject_pending_seat_switch,
     reject_pending_undo,
     request_undo,
+    respond_room_invitation,
     room_stones,
     set_ready,
     store_pending_seat_switch,
+    surrender,
     switch_position,
 )
 
@@ -143,9 +153,98 @@ def match_history(request):
 
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def match_detail(request, match_id):
+    try:
+        game = (
+            GameSession.objects.select_related("black_player", "white_player", "room")
+            .prefetch_related("moves")
+            .get(id=match_id, status=GameSession.STATUS_FINISHED)
+        )
+    except GameSession.DoesNotExist:
+        return Response({"detail": "对局不存在"}, status=status.HTTP_404_NOT_FOUND)
+    if request.user.id not in {game.black_player_id, game.white_player_id}:
+        return Response({"detail": "无权查看该棋谱"}, status=status.HTTP_403_FORBIDDEN)
+    data = {
+        "id": game.id,
+        "room_name": game.room.name if game.room else game.room_name,
+        "rule_set": game.rule_set,
+        "black_player": {
+            "id": game.black_player_id,
+            "username": game.black_player.username if game.black_player else "未知玩家",
+        },
+        "white_player": {
+            "id": game.white_player_id,
+            "username": game.white_player.username if game.white_player else "未知玩家",
+        },
+        "winner": game.winner,
+        "end_reason": game.end_reason,
+        "started_at": game.started_at,
+        "ended_at": game.ended_at,
+        "moves": game.moves.all(),
+    }
+    return Response(GameReplaySerializer(data).data)
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def leaderboard(request):
+    entries = []
+    users = User.objects.all().order_by("username")
+    for user in users:
+        stats = UserSerializer(user).data["stats"]
+        entries.append(
+            {
+                "user": {"id": user.id, "username": user.username},
+                "wins": stats["wins"],
+                "totalGames": stats["totalGames"],
+                "winRate": stats["winRate"],
+            }
+        )
+    entries = sorted(entries, key=lambda item: (-item["wins"], item["user"]["username"]))[:10]
+    for index, entry in enumerate(entries, start=1):
+        entry["rank"] = index
+    return Response({"entries": LeaderboardEntrySerializer(entries, many=True).data})
+
+
+@api_view(["GET"])
 @permission_classes([AllowAny])
 def online_users(request):
     return Response({"users": online_users_payload()})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def pending_invitations(request):
+    invitations = (
+        RoomInvitation.objects.filter(invitee=request.user, status=RoomInvitation.STATUS_PENDING)
+        .select_related("room", "inviter")
+        .order_by("-created_at")[:10]
+    )
+    return Response({"invitations": RoomInvitationSerializer(invitations, many=True).data})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def respond_invitation_view(request, invitation_id):
+    try:
+        room, invitation = respond_room_invitation(
+            RoomInvitation.objects.get(id=invitation_id),
+            request.user,
+            bool(request.data.get("accepted")),
+        )
+    except RoomInvitation.DoesNotExist:
+        return Response({"detail": "邀请不存在"}, status=status.HTTP_404_NOT_FOUND)
+    except ValueError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    if room:
+        broadcast_room_state(room.id)
+    return Response(
+        {
+            "invitation": RoomInvitationSerializer(invitation).data,
+            "room": RoomSerializer(room).data if room else None,
+        }
+    )
 
 
 def active_rooms_queryset():
@@ -173,6 +272,8 @@ def rooms(request):
             .select_related("black_player", "white_player", "current_game")
             .prefetch_related("spectators__user")
         )
+        for room in queryset:
+            ensure_room_host(room)
         return Response(RoomSerializer(queryset, many=True).data)
 
     name = (request.data.get("name") or "未命名房间").strip() or "未命名房间"
@@ -194,6 +295,8 @@ def rooms(request):
         name=name[:80],
         rule_set=rule_set,
         black_player=request.user,
+        host=request.user,
+        black_joined_at=timezone.now(),
         move_time_seconds=move_time_seconds,
         total_time_seconds=total_time_seconds,
     )
@@ -231,6 +334,36 @@ def leave_room_view(request, room_id):
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
 
 
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def kick_room_user_view(request, room_id):
+    try:
+        room = kick_user(Room.objects.get(id=room_id), request.user, request.data.get("user_id"))
+        if room:
+            broadcast_room_state(room.id)
+        return Response({"room": RoomSerializer(room).data if room else None})
+    except Room.DoesNotExist:
+        return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
+    except (TypeError, ValueError) as exc:
+        broadcast_room_state(room_id)
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def invite_room_user_view(request, room_id):
+    try:
+        invitee = User.objects.get(id=request.data.get("user_id"))
+        invitation = create_room_invitation(Room.objects.get(id=room_id), request.user, invitee)
+        return Response({"invitation": RoomInvitationSerializer(invitation).data})
+    except User.DoesNotExist:
+        return Response({"detail": "邀请的玩家不存在"}, status=status.HTTP_404_NOT_FOUND)
+    except Room.DoesNotExist:
+        return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
+    except ValueError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def room_state(request, room_id):
@@ -243,6 +376,9 @@ def room_state(request, room_id):
         ensure_room_member(room, request.user)
     except ValueError:
         return Response({"detail": "请先加入房间"}, status=status.HTTP_403_FORBIDDEN)
+    ensure_room_host(room)
+    mark_room_seen(room, request.user, throttle_seconds=10)
+    room.refresh_from_db()
     room, timed_out = finish_if_turn_timed_out(room)
     if timed_out:
         broadcast_room_state(room.id)
@@ -297,6 +433,20 @@ def move_view(request, room_id):
         room, result = make_move(Room.objects.get(id=room_id), request.user, request.data.get("x"), request.data.get("y"))
         broadcast_room_state(room.id)
         return Response({"room": RoomSerializer(room).data, "result": result.__dict__})
+    except Room.DoesNotExist:
+        return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
+    except ValueError as exc:
+        broadcast_room_state(room_id)
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def surrender_view(request, room_id):
+    try:
+        room = surrender(Room.objects.get(id=room_id), request.user)
+        broadcast_room_state(room.id)
+        return Response(RoomSerializer(room).data)
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
     except ValueError as exc:

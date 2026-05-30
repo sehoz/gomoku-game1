@@ -5,7 +5,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from .models import ChatMessage, GameSession, Move, Room, SpectatorSeat
+from .models import ChatMessage, GameSession, Move, Room, RoomInvitation, SpectatorSeat
 from .rules import RuleResult, evaluate_move, next_turn
 
 UNDO_LIMIT = 3
@@ -88,6 +88,36 @@ def user_seat(room, user):
     if seat:
         return f"spectator{seat.seat_number}"
     return None
+
+
+def all_participants(room):
+    participants = []
+    if room.black_player_id:
+        participants.append(("black", room.black_player, room.black_joined_at or room.created_at))
+    if room.white_player_id:
+        participants.append(("white", room.white_player, room.white_joined_at or room.created_at))
+    for spectator in room.spectators.select_related("user").all():
+        participants.append((f"spectator{spectator.seat_number}", spectator.user, spectator.joined_at))
+    return participants
+
+
+def next_host(room):
+    candidates = [(joined_at, user) for _seat, user, joined_at in all_participants(room) if user]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: item[0])[0][1]
+
+
+def ensure_room_host(room):
+    if not room.host_id and room.occupants_count:
+        room.host = next_host(room)
+        room.save(update_fields=["host"])
+    return room
+
+
+def ensure_host(room, user):
+    if room.host_id != user.id:
+        raise ValueError("只有房主可以执行该操作")
 
 
 def seat_user(room, seat):
@@ -374,10 +404,12 @@ def clear_user_seat(room, user):
     was_player = False
     if room.black_player_id == user.id:
         room.black_player = None
+        room.black_joined_at = None
         room.black_ready = False
         was_player = True
     if room.white_player_id == user.id:
         room.white_player = None
+        room.white_joined_at = None
         room.white_ready = False
         was_player = True
     room.spectators.filter(user=user).delete()
@@ -387,6 +419,7 @@ def clear_user_seat(room, user):
 
 
 def assign_user_to_seat(room, user, seat):
+    now = timezone.now()
     key_value = normalize_seat_key(seat)
     if key_value.startswith("spectator"):
         seat_number = int(spectator_number_from_key(key_value))
@@ -395,8 +428,10 @@ def assign_user_to_seat(room, user, seat):
         SpectatorSeat.objects.update_or_create(room=room, user=user, defaults={"seat_number": seat_number})
     elif key_value == "black":
         room.black_player = user
+        room.black_joined_at = room.black_joined_at or now
     elif key_value == "white":
         room.white_player = user
+        room.white_joined_at = room.white_joined_at or now
 
 
 def build_seat_switch_request(room, user, target_seat, target_user):
@@ -416,12 +451,30 @@ def build_seat_switch_request(room, user, target_seat, target_user):
 
 
 def apply_direct_seat_move(room, user, target_seat):
+    joined_at = participant_joined_at(room, user)
     clear_user_seat(room, user)
     assign_user_to_seat(room, user, target_seat)
+    set_participant_joined_at(room, user, joined_at)
     room.refresh_status()
     room.last_activity_at = timezone.now()
     room.save()
     return room
+
+
+def participant_joined_at(room, user):
+    if room.black_player_id == user.id:
+        return room.black_joined_at or room.created_at
+    if room.white_player_id == user.id:
+        return room.white_joined_at or room.created_at
+    spectator = spectator_seat(room, user)
+    return spectator.joined_at if spectator else timezone.now()
+
+
+def set_participant_joined_at(room, user, joined_at):
+    if room.black_player_id == user.id:
+        room.black_joined_at = joined_at
+    elif room.white_player_id == user.id:
+        room.white_joined_at = joined_at
 
 
 @transaction.atomic
@@ -440,10 +493,12 @@ def join_room(room, user, password=""):
         raise ValueError("房间已结束")
     if room.black_player_id is None:
         room.black_player = user
+        room.black_joined_at = timezone.now()
         if existing_spectator:
             existing_spectator.delete()
     elif room.white_player_id is None:
         room.white_player = user
+        room.white_joined_at = timezone.now()
         if existing_spectator:
             existing_spectator.delete()
     else:
@@ -452,6 +507,8 @@ def join_room(room, user, password=""):
             raise ValueError("房间已满")
         SpectatorSeat.objects.create(room=room, user=user, seat_number=number)
     room.refresh_status()
+    if not room.host_id:
+        room.host = next_host(room)
     room.last_activity_at = timezone.now()
     room.save()
     mark_room_seen(room, user)
@@ -470,10 +527,12 @@ def leave_room(room, user):
         room.refresh_from_db()
     if room.black_player_id == user.id:
         room.black_player = None
+        room.black_joined_at = None
         room.black_ready = False
         room.white_ready = False
     if room.white_player_id == user.id:
         room.white_player = None
+        room.white_joined_at = None
         room.black_ready = False
         room.white_ready = False
     room.spectators.filter(user=user).delete()
@@ -490,6 +549,8 @@ def leave_room(room, user):
         room.delete()
         return None
     room.refresh_status()
+    if room.host_id == user.id or not room.host_id:
+        room.host = next_host(room)
     room.last_activity_at = timezone.now()
     room.save()
     return room
@@ -542,10 +603,14 @@ def accept_seat_switch(room, request, responder):
     assert_user_can_initiate_switch(room, requester)
     assert_user_can_initiate_switch(room, responder)
 
+    requester_joined_at = participant_joined_at(room, requester)
+    responder_joined_at = participant_joined_at(room, responder)
     clear_user_seat(room, requester)
     clear_user_seat(room, responder)
     assign_user_to_seat(room, requester, target_seat)
     assign_user_to_seat(room, responder, requester_seat)
+    set_participant_joined_at(room, requester, requester_joined_at)
+    set_participant_joined_at(room, responder, responder_joined_at)
     room.refresh_status()
     room.last_activity_at = timezone.now()
     room.save()
@@ -777,3 +842,78 @@ def add_chat(room, user, text):
     message = ChatMessage.objects.create(room=room, sender=user, sender_name=display_sender_name(room, user), text=text[:500])
     touch_room(room)
     return message
+
+
+@transaction.atomic
+def surrender(room, user):
+    room = Room.objects.select_for_update().get(id=room.id)
+    color = user_color(room, user)
+    if color is None:
+        raise ValueError("只有对局玩家可以投降")
+    if not active_game(room):
+        raise ValueError("当前没有进行中的对局")
+    finish_game(room, opponent_color(color), "surrender")
+    room.refresh_from_db()
+    return room
+
+
+@transaction.atomic
+def kick_user(room, host, target_user_id):
+    room = Room.objects.select_for_update().get(id=room.id)
+    ensure_host(room, host)
+    target_user_id = int(target_user_id)
+    if target_user_id == host.id:
+        raise ValueError("房主不能踢出自己")
+    target = seat_user(room, "black") if room.black_player_id == target_user_id else None
+    if target is None and room.white_player_id == target_user_id:
+        target = room.white_player
+    spectator = room.spectators.select_related("user").filter(user_id=target_user_id).first()
+    if target is None and spectator:
+        target = spectator.user
+    if target is None:
+        raise ValueError("目标玩家不在房间内")
+    if active_game(room) and user_color(room, target):
+        finish_game(room, opponent_color(user_color(room, target)), "kick")
+        room.refresh_from_db()
+    clear_user_seat(room, target)
+    if room.occupants_count == 0:
+        room.delete()
+        return None
+    if room.host_id == target.id or not room.host_id:
+        room.host = next_host(room)
+    room.refresh_status()
+    room.last_activity_at = timezone.now()
+    room.save()
+    return room
+
+
+@transaction.atomic
+def create_room_invitation(room, inviter, invitee):
+    room = Room.objects.select_for_update().get(id=room.id)
+    ensure_host(room, inviter)
+    if participant_role(room, invitee):
+        raise ValueError("该玩家已经在房间内")
+    invitation, _created = RoomInvitation.objects.update_or_create(
+        room=room,
+        invitee=invitee,
+        status=RoomInvitation.STATUS_PENDING,
+        defaults={"inviter": inviter},
+    )
+    touch_room(room)
+    return invitation
+
+
+@transaction.atomic
+def respond_room_invitation(invitation, user, accepted):
+    invitation = RoomInvitation.objects.select_for_update().select_related("room", "invitee").get(id=invitation.id)
+    if invitation.invitee_id != user.id:
+        raise ValueError("这不是你的邀请")
+    if invitation.status != RoomInvitation.STATUS_PENDING:
+        raise ValueError("邀请已经处理过")
+    invitation.status = RoomInvitation.STATUS_ACCEPTED if accepted else RoomInvitation.STATUS_REJECTED
+    invitation.responded_at = timezone.now()
+    invitation.save(update_fields=["status", "responded_at"])
+    room = None
+    if accepted:
+        room = join_room(invitation.room, user)
+    return room, invitation

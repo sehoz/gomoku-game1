@@ -7,6 +7,7 @@ import Avatar from "../components/Avatar.vue";
 import GameBoard from "../components/GameBoard.vue";
 import Modal from "../components/Modal.vue";
 import { authState, isAuthenticated } from "../stores/auth";
+import { presenceState } from "../stores/presence";
 import { playChatSound, playStoneSound } from "../stores/settings";
 import { nextTurn } from "../rules";
 import type { ChatMessage, Move, Room, RoomState, SeatSwitchRequest, StoneColor, UndoRequest } from "../types";
@@ -48,6 +49,7 @@ const myRoleLabel = computed(() => {
 });
 const myReady = computed(() => (myColor.value === "black" ? room.value?.black_ready : myColor.value === "white" ? room.value?.white_ready : false));
 const activeGame = computed(() => room.value?.current_game?.status === "playing");
+const isHost = computed(() => Boolean(room.value?.host && room.value.host === authState.user?.id));
 const myUndoRemaining = computed(() => (myColor.value === "black" ? room.value?.black_undo_remaining ?? 3 : myColor.value === "white" ? room.value?.white_undo_remaining ?? 3 : 0));
 const currentSeatKey = computed(() => {
   if (myColor.value) return myColor.value;
@@ -69,6 +71,14 @@ const spectatorSlots = computed(() => {
     };
   });
 });
+const roomUserIds = computed(() => {
+  const ids = new Set<number>();
+  if (room.value?.black_player) ids.add(room.value.black_player);
+  if (room.value?.white_player) ids.add(room.value.white_player);
+  room.value?.spectators.forEach((seat) => ids.add(seat.user));
+  return ids;
+});
+const inviteCandidates = computed(() => presenceState.users.filter((user) => user.id !== authState.user?.id && !roomUserIds.value.has(user.id)));
 const statusLabel = computed(() => {
   if (!room.value) return "加载中";
   if (room.value.current_game?.status === "finished") {
@@ -160,6 +170,11 @@ function applyState(state: RoomState) {
   room.value = state.room;
   moves.value = state.moves;
   messages.value = state.messages;
+  if (authState.user && ![state.room.black_player, state.room.white_player].includes(authState.user.id) && !state.room.spectators.some((seat) => seat.user === authState.user?.id)) {
+    notice.value = "你已不在该房间。";
+    window.setTimeout(() => router.push("/rooms"), 700);
+    return;
+  }
   if (state.moves.length > previousMoveCount) playStoneSound();
   if (previousRoom && state.messages.length > previousMessageCount) playChatSound();
   syncPendingRequests(state.room);
@@ -198,7 +213,10 @@ async function loadState(redirectOnError = false) {
     applyState(await api.roomState(roomId));
     return true;
   } catch (err) {
-    notice.value = err instanceof Error ? err.message : "房间加载失败";
+    const message = err instanceof Error ? err.message : "房间加载失败";
+    if (redirectOnError || !message.includes("无法连接服务器")) {
+      notice.value = message;
+    }
     if (redirectOnError) router.push("/rooms");
     return false;
   }
@@ -229,7 +247,7 @@ function connectSocket() {
   socket.onopen = () => {
     socketConnected.value = true;
     sendSocket({ type: "ping" });
-    heartbeatTimer = window.setInterval(() => sendSocket({ type: "ping" }), 1000);
+    heartbeatTimer = window.setInterval(() => sendSocket({ type: "ping" }), 5000);
   };
   socket.onmessage = (event) => {
     const data = JSON.parse(event.data);
@@ -269,7 +287,7 @@ function connectSocket() {
       notice.value = data.detail;
     }
     if (data.type === "peer_status") {
-      if (data.user_id !== authState.user?.id) {
+      if (data.online && data.user_id !== authState.user?.id) {
         notice.value = data.online ? `${data.username} 已重新连接。` : `${data.username} 已断开连接，等待重连。`;
       }
     }
@@ -285,7 +303,6 @@ function connectSocket() {
       heartbeatTimer = null;
     }
     if (!unmounted) {
-      notice.value = "实时连接已断开，正在自动重连。";
       reconnectTimer = window.setTimeout(connectSocket, 2000);
     }
   };
@@ -430,6 +447,38 @@ function rejectSeatSwitch() {
   void respondSeatSwitch(false);
 }
 
+async function surrenderGame() {
+  if (!activeGame.value || !myColor.value) return;
+  try {
+    await api.surrender(roomId);
+    notice.value = "你已投降，本局结束。";
+    await loadState(false);
+  } catch (err) {
+    notice.value = err instanceof Error ? err.message : "投降失败";
+  }
+}
+
+async function kickUser(userId: number) {
+  if (!isHost.value) return;
+  try {
+    await api.kickRoomUser(roomId, userId);
+    notice.value = "已移出该玩家。";
+    await loadState(false);
+  } catch (err) {
+    notice.value = err instanceof Error ? err.message : "踢出失败";
+  }
+}
+
+async function inviteUser(userId: number) {
+  if (!isHost.value) return;
+  try {
+    await api.inviteRoomUser(roomId, userId);
+    notice.value = "邀请已发送。";
+  } catch (err) {
+    notice.value = err instanceof Error ? err.message : "邀请失败";
+  }
+}
+
 async function leave() {
   if (sendSocket({ type: "leave" })) {
     window.setTimeout(() => {
@@ -478,6 +527,7 @@ onUnmounted(() => {
           <div class="control-actions">
             <button class="primary-button" :disabled="!canReady" type="button" @click="toggleReady"><Check :size="18" />{{ myReady ? "取消准备" : "准备" }}</button>
             <button class="secondary-button" :disabled="!activeGame || !myColor || ownUndoPending" type="button" @click="requestUndo"><Undo2 :size="18" />{{ ownUndoPending ? "等待回应" : `悔棋（${myUndoRemaining}）` }}</button>
+            <button class="secondary-button danger-button" :disabled="!activeGame || !myColor" type="button" @click="surrenderGame">投降</button>
           </div>
         </div>
         <div class="control-notice board-notice" :class="{ warning: notice.includes('失败') || notice.includes('断开') || notice.includes('不能') || notice.includes('用完') }">{{ notice }}</div>
@@ -487,21 +537,30 @@ onUnmounted(() => {
         <h2>玩家</h2>
         <div class="seat-list">
           <div class="seat-row">
-            <div class="seat-player"><Avatar :username="room?.black_player_name || '等待'" /><div><strong>{{ room?.black_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-black">黑棋</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.black_ready ? 'ready' : 'waiting']">{{ room?.black_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(blackTimeLeft) }}</span></span></div></div>
-            <button class="secondary-button" :disabled="!canSwitchTo('black')" @click="switchPosition('black')">{{ seatButtonLabel('black', Boolean(room?.black_player)) }}</button>
+            <div class="seat-player"><Avatar :username="room?.black_player_name || '等待'" /><div><strong>{{ room?.black_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-black">黑棋</span><span v-if="room?.host === room?.black_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.black_ready ? 'ready' : 'waiting']">{{ room?.black_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(blackTimeLeft) }}</span></span></div></div>
+            <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo('black')" @click="switchPosition('black')">{{ seatButtonLabel('black', Boolean(room?.black_player)) }}</button><button v-if="isHost && room?.black_player && room.black_player !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(room.black_player)">踢出</button></div>
           </div>
           <div class="seat-row">
-            <div class="seat-player"><Avatar :username="room?.white_player_name || '等待'" /><div><strong>{{ room?.white_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-white">白棋</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.white_ready ? 'ready' : 'waiting']">{{ room?.white_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(whiteTimeLeft) }}</span></span></div></div>
-            <button class="secondary-button" :disabled="!canSwitchTo('white')" @click="switchPosition('white')">{{ seatButtonLabel('white', Boolean(room?.white_player)) }}</button>
+            <div class="seat-player"><Avatar :username="room?.white_player_name || '等待'" /><div><strong>{{ room?.white_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-white">白棋</span><span v-if="room?.host === room?.white_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.white_ready ? 'ready' : 'waiting']">{{ room?.white_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(whiteTimeLeft) }}</span></span></div></div>
+            <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo('white')" @click="switchPosition('white')">{{ seatButtonLabel('white', Boolean(room?.white_player)) }}</button><button v-if="isHost && room?.white_player && room.white_player !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(room.white_player)">踢出</button></div>
           </div>
         </div>
         <div class="spectator-panel">
           <h2>观战席</h2>
           <div class="spectator-list">
             <div v-for="slot in spectatorSlots" :key="slot.seatNumber" class="spectator-row">
-              <div class="spectator-main"><span class="seat-badge">观众{{ slot.seatNumber }}</span><strong>{{ slot.user?.username || "空位" }}</strong></div>
-              <button class="secondary-button" :disabled="!canSwitchTo(`spectator${slot.seatNumber}`)" @click="switchPosition(`spectator${slot.seatNumber}`)">{{ seatButtonLabel(`spectator${slot.seatNumber}`, Boolean(slot.user)) }}</button>
+              <div class="spectator-main"><span class="seat-badge">观众{{ slot.seatNumber }}</span><strong>{{ slot.user?.username || "空位" }}</strong><span v-if="slot.user && room?.host === slot.user.user" class="seat-inline-label">房主</span></div>
+              <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo(`spectator${slot.seatNumber}`)" @click="switchPosition(`spectator${slot.seatNumber}`)">{{ seatButtonLabel(`spectator${slot.seatNumber}`, Boolean(slot.user)) }}</button><button v-if="isHost && slot.user && slot.user.user !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(slot.user.user)">踢出</button></div>
             </div>
+          </div>
+        </div>
+        <div v-if="isHost" class="invite-panel">
+          <h2>邀请在线玩家</h2>
+          <div v-if="inviteCandidates.length === 0" class="empty-state">暂无可邀请的在线玩家。</div>
+          <div v-else class="invite-list">
+            <button v-for="user in inviteCandidates" :key="user.id" class="secondary-button" type="button" @click="inviteUser(user.id)">
+              {{ user.username }} · {{ user.stats.wins }} 胜
+            </button>
           </div>
         </div>
         <div class="room-chat">

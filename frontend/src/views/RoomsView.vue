@@ -159,15 +159,15 @@ onUnmounted(() => {
         <div class="form-subtitle">计时设置</div>
         <label>每步限时<select v-model.number="form.move_time_seconds"><option :value="15">15 秒</option><option :value="30">30 秒</option><option :value="60">60 秒</option><option :value="120">120 秒</option></select></label>
         <label>每方局时<select v-model.number="form.total_time_minutes"><option :value="5">5 分钟</option><option :value="10">10 分钟</option><option :value="15">15 分钟</option><option :value="30">30 分钟</option></select></label>
-        <label class="checkbox-row"><input v-model="form.has_password" type="checkbox" />设置密码</label>
-        <label v-if="form.has_password">密码<input v-model="form.password" type="password" /></label>
+        <label class="checkbox-row"><input v-model="form.has_password" type="checkbox" />设置房间口令</label>
+        <label v-if="form.has_password">房间口令<input v-model="form.password" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text" name="room-create-code" type="text" /></label>
         <button class="primary-button" type="submit">创建并进入</button>
       </form>
     </Modal>
     <Modal v-if="joinRoom" title="输入房间密码" @close="joinRoom = null">
       <form class="modal-form" @submit.prevent="submitJoin">
         <p v-if="joinError" class="form-error">{{ joinError }}</p>
-        <label>密码<input v-model="password" type="password" /></label>
+        <label>房间口令<input v-model="password" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text" name="room-join-code" type="text" /></label>
         <button class="primary-button" type="submit">确认进入</button>
       </form>
     </Modal>
