@@ -1,3 +1,5 @@
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.db.models import Q
@@ -33,6 +35,12 @@ from .services import (
     set_ready,
     switch_position,
 )
+
+
+def broadcast_room_state(room_id):
+    channel_layer = get_channel_layer()
+    if channel_layer:
+        async_to_sync(channel_layer.group_send)(f"room_{room_id}", {"type": "room.state"})
 
 
 def token_response(user):
@@ -88,10 +96,11 @@ def me(request):
 @permission_classes([IsAuthenticated])
 def match_history(request):
     queryset = (
-        GameSession.objects.filter(status=GameSession.STATUS_FINISHED)
+        GameSession.objects.filter(status=GameSession.STATUS_FINISHED, moves__isnull=False)
         .filter(Q(black_player=request.user) | Q(white_player=request.user))
         .select_related("room", "black_player", "white_player")
         .prefetch_related("moves")
+        .distinct()
         .order_by("-ended_at", "-started_at")[:20]
     )
     records = []
@@ -165,6 +174,7 @@ def rooms(request):
 def join_room_view(request, room_id):
     try:
         room = join_room(Room.objects.get(id=room_id), request.user, request.data.get("password", ""))
+        broadcast_room_state(room.id)
         return Response(RoomSerializer(room).data)
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
@@ -177,6 +187,8 @@ def join_room_view(request, room_id):
 def leave_room_view(request, room_id):
     try:
         room = leave_room(Room.objects.get(id=room_id), request.user)
+        if room:
+            broadcast_room_state(room.id)
         return Response({"room": RoomSerializer(room).data if room else None})
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
@@ -212,6 +224,7 @@ def switch_seat_view(request, room_id):
             request.user,
             request.data.get("target_seat") or request.data.get("target_color"),
         )
+        broadcast_room_state(room.id)
         return Response(RoomSerializer(room).data)
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
@@ -226,6 +239,7 @@ def switch_seat_view(request, room_id):
 def ready_view(request, room_id):
     try:
         room = set_ready(Room.objects.get(id=room_id), request.user, request.data.get("ready", True))
+        broadcast_room_state(room.id)
         return Response(RoomSerializer(room).data)
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
@@ -238,6 +252,7 @@ def ready_view(request, room_id):
 def move_view(request, room_id):
     try:
         room, result = make_move(Room.objects.get(id=room_id), request.user, request.data.get("x"), request.data.get("y"))
+        broadcast_room_state(room.id)
         return Response({"room": RoomSerializer(room).data, "result": result.__dict__})
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
@@ -250,6 +265,7 @@ def move_view(request, room_id):
 def chat_view(request, room_id):
     try:
         message = add_chat(Room.objects.get(id=room_id), request.user, request.data.get("text", ""))
+        broadcast_room_state(room_id)
         return Response(ChatMessageSerializer(message).data)
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)

@@ -13,9 +13,10 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ("id", "username", "email", "stats")
 
     def get_stats(self, user):
-        finished = GameSession.objects.filter(status=GameSession.STATUS_FINISHED).filter(
+        finished = GameSession.objects.filter(status=GameSession.STATUS_FINISHED, moves__isnull=False).filter(
             black_player=user
-        ) | GameSession.objects.filter(status=GameSession.STATUS_FINISHED).filter(white_player=user)
+        ) | GameSession.objects.filter(status=GameSession.STATUS_FINISHED, moves__isnull=False).filter(white_player=user)
+        finished = finished.distinct()
         total = finished.count()
         wins = finished.filter(winner__in=["black", "white"]).filter(
             black_player=user,

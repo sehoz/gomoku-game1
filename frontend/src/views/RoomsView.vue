@@ -21,16 +21,16 @@ const password = ref("");
 const form = ref({ name: "好友对局", rule_set: "standard" as RuleSet, has_password: false, password: "" });
 let refreshTimer: number | null = null;
 
-async function load() {
+async function load(showSpinner = true) {
   if (!isAuthenticated()) return;
-  loading.value = true;
+  if (showSpinner) loading.value = true;
   try {
     rooms.value = await api.rooms();
     error.value = "";
   } catch (err) {
     error.value = err instanceof Error ? err.message : "房间列表加载失败";
   } finally {
-    loading.value = false;
+    if (showSpinner) loading.value = false;
   }
 }
 
@@ -97,7 +97,7 @@ function enterLabel(room: Room) {
 
 onMounted(() => {
   void load();
-  refreshTimer = window.setInterval(load, 15000);
+  refreshTimer = window.setInterval(() => void load(false), 1000);
 });
 onUnmounted(() => {
   if (refreshTimer !== null) window.clearInterval(refreshTimer);
@@ -109,7 +109,7 @@ onUnmounted(() => {
     <header class="page-header">
       <div><RouterLink class="back-link" to="/">‹ 返回首页</RouterLink><h1>联机对战</h1><p>登录后可以创建或加入房间。</p></div>
       <div v-if="isAuthenticated()" class="header-actions">
-        <button class="secondary-button" type="button" @click="load"><RefreshCw :size="18" :class="{ spinning: loading }" />刷新列表</button>
+        <button class="secondary-button" type="button" @click="load()"><RefreshCw :size="18" :class="{ spinning: loading }" />刷新列表</button>
         <button class="primary-button" type="button" @click="createOpen = true; createError = ''"><Plus :size="18" />创建房间</button>
       </div>
     </header>

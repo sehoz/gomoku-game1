@@ -34,6 +34,7 @@ const ownUndoPending = ref(false);
 const ownSeatSwitchPending = ref(false);
 let socket: WebSocket | null = null;
 let heartbeatTimer: number | null = null;
+let statePollTimer: number | null = null;
 
 const turn = computed(() => nextTurn(moves.value));
 const myColor = computed<StoneColor | null>(() => {
@@ -84,13 +85,34 @@ const statusLabel = computed(() => {
   return "已结束";
 });
 
+function playerNameChanged(before: Room | null, after: Room, color: StoneColor) {
+  if (color === "black") return before?.black_player_name !== after.black_player_name;
+  return before?.white_player_name !== after.white_player_name;
+}
+
+function readyChanged(before: Room | null, after: Room, color: StoneColor) {
+  if (!before) return false;
+  return color === "black" ? before.black_ready !== after.black_ready : before.white_ready !== after.white_ready;
+}
+
 function applyState(state: RoomState) {
   const previousMoveCount = moves.value.length;
+  const previousRoom = room.value;
   room.value = state.room;
   moves.value = state.moves;
   messages.value = state.messages;
   if (state.moves.length > previousMoveCount) playStoneSound();
-  if (state.room.current_game?.status === "finished") {
+  if (previousRoom && playerNameChanged(previousRoom, state.room, "black") && state.room.black_player_name) {
+    notice.value = `${state.room.black_player_name} 已进入黑棋位置。`;
+  } else if (previousRoom && playerNameChanged(previousRoom, state.room, "white") && state.room.white_player_name) {
+    notice.value = `${state.room.white_player_name} 已进入白棋位置。`;
+  } else if (readyChanged(previousRoom, state.room, "black")) {
+    notice.value = `黑棋${state.room.black_ready ? "已准备" : "取消准备"}。`;
+  } else if (readyChanged(previousRoom, state.room, "white")) {
+    notice.value = `白棋${state.room.white_ready ? "已准备" : "取消准备"}。`;
+  } else if (previousRoom?.status !== "playing" && state.room.status === "playing") {
+    notice.value = "双方已准备，对局开始。";
+  } else if (state.room.current_game?.status === "finished") {
     if (state.room.current_game.winner) {
       notice.value = `${state.room.current_game.winner === "black" ? "黑棋" : "白棋"}获胜。本房间可继续准备下一局。`;
     } else {
@@ -105,22 +127,28 @@ function applyState(state: RoomState) {
   }
 }
 
+async function loadState(redirectOnError = false) {
+  try {
+    applyState(await api.roomState(roomId));
+    return true;
+  } catch (err) {
+    notice.value = err instanceof Error ? err.message : "房间加载失败";
+    if (redirectOnError) router.push("/rooms");
+    return false;
+  }
+}
+
 async function load() {
   if (!isAuthenticated()) {
     router.push("/rooms");
     return;
   }
-  try {
-    applyState(await api.roomState(roomId));
-  } catch (err) {
-    notice.value = err instanceof Error ? err.message : "房间加载失败";
-    router.push("/rooms");
-    return;
-  }
+  if (!(await loadState(true))) return;
+  statePollTimer = window.setInterval(() => void loadState(false), 1000);
   socket = new WebSocket(roomSocketUrl(roomId));
   socket.onopen = () => {
     sendSocket({ type: "ping" });
-    heartbeatTimer = window.setInterval(() => sendSocket({ type: "ping" }), 30000);
+    heartbeatTimer = window.setInterval(() => sendSocket({ type: "ping" }), 1000);
   };
   socket.onmessage = (event) => {
     const data = JSON.parse(event.data);
@@ -281,6 +309,7 @@ async function leave() {
 onMounted(load);
 onUnmounted(() => {
   if (heartbeatTimer !== null) window.clearInterval(heartbeatTimer);
+  if (statePollTimer !== null) window.clearInterval(statePollTimer);
   socket?.close();
 });
 </script>

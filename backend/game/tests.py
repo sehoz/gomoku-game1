@@ -223,6 +223,19 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(room.moves.count(), 1)
         self.assertEqual(GameSession.objects.count(), 1)
 
+    def test_start_game_persists_both_ready_flags(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = Room.objects.create(name="测试房间", black_player=black, white_player=white)
+
+        set_ready(room, black, True)
+        set_ready(room, white, True)
+        room.refresh_from_db()
+
+        self.assertEqual(room.status, Room.STATUS_PLAYING)
+        self.assertTrue(room.black_ready)
+        self.assertTrue(room.white_ready)
+
     def test_finished_game_is_logged_without_deleting_room(self):
         black = User.objects.create_user(username="black", password="gomoku123")
         white = User.objects.create_user(username="white", password="gomoku123")
@@ -257,6 +270,21 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["records"][0]["room_name"], "测试房间")
         self.assertEqual(response.data["records"][0]["result"], "win")
+
+    def test_zero_move_ready_session_is_not_logged(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = self.playable_room(black, white)
+
+        leave_room(room, black)
+        client = APIClient()
+        client.force_authenticate(black)
+        response = client.get("/api/profile/matches/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["records"], [])
+        self.assertFalse(GameSession.objects.exists())
+        self.assertTrue(Room.objects.filter(id=room.id).exists())
 
     def test_switch_to_empty_spectator_seat_directly(self):
         black = User.objects.create_user(username="black", password="gomoku123")

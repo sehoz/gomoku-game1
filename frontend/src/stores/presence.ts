@@ -10,12 +10,19 @@ export const presenceState = reactive({
 
 let socket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
+let pollTimer: number | null = null;
 let activeToken = "";
 
 function clearReconnect() {
   if (reconnectTimer === null) return;
   window.clearTimeout(reconnectTimer);
   reconnectTimer = null;
+}
+
+function clearPoll() {
+  if (pollTimer === null) return;
+  window.clearInterval(pollTimer);
+  pollTimer = null;
 }
 
 export async function refreshPresence() {
@@ -32,6 +39,7 @@ export function connectPresence() {
   if (socket && activeToken === token && socket.readyState !== WebSocket.CLOSED) return;
   disconnectPresence();
   activeToken = token;
+  pollTimer = window.setInterval(refreshPresence, 1000);
   socket = new WebSocket(presenceSocketUrl());
   socket.onopen = () => {
     presenceState.connected = true;
@@ -53,6 +61,7 @@ export function connectPresence() {
 
 export function disconnectPresence() {
   clearReconnect();
+  clearPoll();
   if (socket) {
     socket.onclose = null;
     socket.close();

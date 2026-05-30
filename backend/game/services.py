@@ -155,6 +155,8 @@ def start_game(room):
     if room.current_game and room.current_game.status == GameSession.STATUS_PLAYING:
         return room.current_game
     now = timezone.now()
+    room.black_ready = True
+    room.white_ready = True
     game = GameSession.objects.create(
         room=room,
         room_name=room.name,
@@ -169,7 +171,18 @@ def start_game(room):
     room.black_last_seen_at = room.black_last_seen_at or now
     room.white_last_seen_at = room.white_last_seen_at or now
     room.last_activity_at = now
-    room.save(update_fields=["current_game", "winner", "status", "black_last_seen_at", "white_last_seen_at", "last_activity_at"])
+    room.save(
+        update_fields=[
+            "current_game",
+            "winner",
+            "status",
+            "black_ready",
+            "white_ready",
+            "black_last_seen_at",
+            "white_last_seen_at",
+            "last_activity_at",
+        ]
+    )
     return game
 
 
@@ -178,6 +191,16 @@ def finish_game(room, winner="", reason="finished"):
     if not game:
         return room
     now = timezone.now()
+    if not game.moves.exists():
+        room.current_game = None
+        room.winner = ""
+        room.status = Room.STATUS_WAITING
+        room.black_ready = False
+        room.white_ready = False
+        room.last_activity_at = now
+        room.save(update_fields=["current_game", "winner", "status", "black_ready", "white_ready", "last_activity_at"])
+        game.delete()
+        return room
     game.winner = winner or ""
     game.status = GameSession.STATUS_FINISHED
     game.end_reason = reason
