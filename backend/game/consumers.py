@@ -6,7 +6,7 @@ from django.db.models import Q
 from channels.generic.websocket import AsyncWebsocketConsumer
 from rest_framework.authtoken.models import Token
 
-from .presence import mark_offline, mark_online, online_users_payload
+from .presence import mark_offline, mark_online, online_users_payload, touch_user
 from .models import Room
 from .serializers import RoomStateSerializer
 from .services import (
@@ -180,6 +180,11 @@ def set_presence_offline(user_id, channel_name):
     mark_offline(user_id, channel_name)
 
 
+@sync_to_async
+def touch_presence(user_id):
+    touch_user(user_id)
+
+
 class RoomConsumer(AsyncWebsocketConsumer):
     pending_undo_requests = {}
     pending_seat_switch_requests = {}
@@ -350,6 +355,8 @@ class PresenceConsumer(AsyncWebsocketConsumer):
             await self.broadcast_presence()
 
     async def receive(self, text_data=None, bytes_data=None):
+        if getattr(self, "user", None):
+            await touch_presence(self.user.id)
         await self.send_presence()
 
     async def broadcast_presence(self):

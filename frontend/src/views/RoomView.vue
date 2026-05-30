@@ -24,6 +24,8 @@ const undoRequest = ref<UndoRequest | null>(null);
 const seatSwitchRequest = ref<SeatSwitchRequest | null>(null);
 const ownUndoPending = ref(false);
 const ownSeatSwitchPending = ref(false);
+const pendingOptimisticMoves = ref<Move[]>([]);
+const sentInviteLabels = ref<Record<number, string>>({});
 const socketConnected = ref(false);
 const nowTick = ref(Date.now());
 let socket: WebSocket | null = null;
@@ -168,8 +170,14 @@ function applyState(state: RoomState) {
   const previousMoveCount = moves.value.length;
   const previousMessageCount = messages.value.length;
   const previousRoom = room.value;
+  pendingOptimisticMoves.value = pendingOptimisticMoves.value.filter(
+    (pending) => !state.moves.some((move) => move.x === pending.x && move.y === pending.y),
+  );
   room.value = state.room;
-  moves.value = state.moves;
+  moves.value = [
+    ...state.moves,
+    ...pendingOptimisticMoves.value.filter((pending) => !state.moves.some((move) => move.x === pending.x && move.y === pending.y)),
+  ];
   messages.value = state.messages;
   if (authState.user && ![state.room.black_player, state.room.white_player].includes(authState.user.id) && !state.room.spectators.some((seat) => seat.user === authState.user?.id)) {
     notice.value = "你已不在该房间。";
@@ -296,6 +304,7 @@ function connectSocket() {
     if (data.type === "error") {
       ownUndoPending.value = false;
       ownSeatSwitchPending.value = false;
+      pendingOptimisticMoves.value = [];
       notice.value = data.detail;
       void loadState(false);
     }
@@ -368,7 +377,9 @@ async function play(x: number, y: number) {
   const color = myColor.value;
   if (!color) return;
   const before = moves.value;
-  moves.value = [...moves.value, { x, y, color, player: authState.user?.id }];
+  const pendingMove = { x, y, color, player: authState.user?.id };
+  pendingOptimisticMoves.value = [pendingMove];
+  moves.value = [...moves.value.filter((move) => move.x !== x || move.y !== y), pendingMove];
   playStoneSound();
   notice.value = "落子已发送。";
   if (await sendRealtime({ type: "move", x, y })) return;
@@ -379,8 +390,15 @@ async function play(x: number, y: number) {
     if (isTransientError(err)) {
       notice.value = "网络波动，正在重新同步落子。";
       window.setTimeout(() => void loadState(false), 1200);
+      window.setTimeout(() => {
+        if (!pendingOptimisticMoves.value.some((move) => move.x === x && move.y === y)) return;
+        pendingOptimisticMoves.value = [];
+        moves.value = before;
+        void loadState(false);
+      }, 3500);
       return;
     }
+    pendingOptimisticMoves.value = [];
     moves.value = before;
     notice.value = errorMessage(err, "落子失败");
   }
@@ -534,7 +552,9 @@ async function inviteUser(userId: number) {
   if (!isHost.value) return;
   try {
     await api.inviteRoomUser(roomId, userId);
-    notice.value = "邀请已发送。";
+    const user = inviteCandidates.value.find((candidate) => candidate.id === userId);
+    sentInviteLabels.value[userId] = "已发送";
+    notice.value = `已向 ${user?.username || "该玩家"} 发送邀请。`;
   } catch (err) {
     notice.value = isTransientError(err) ? "网络波动，邀请未确认。" : errorMessage(err, "邀请失败");
   }
@@ -620,7 +640,7 @@ onUnmounted(() => {
           <div v-if="inviteCandidates.length === 0" class="empty-state">暂无可邀请的在线玩家。</div>
           <div v-else class="invite-list">
             <button v-for="user in inviteCandidates" :key="user.id" class="secondary-button" type="button" @click="inviteUser(user.id)">
-              {{ user.username }} · {{ user.stats.wins }} 胜
+              {{ user.username }} · {{ sentInviteLabels[user.id] || `${user.stats.wins} 胜` }}
             </button>
           </div>
         </div>

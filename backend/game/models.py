@@ -106,6 +106,15 @@ class Room(models.Model):
         return self.name
 
 
+class PlayerProfile(models.Model):
+    user = models.OneToOneField(settings.AUTH_USER_MODEL, related_name="player_profile", on_delete=models.CASCADE)
+    avatar_data_url = models.TextField(blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return self.user.username
+
+
 class GameSession(models.Model):
     STATUS_PLAYING = "playing"
     STATUS_FINISHED = "finished"

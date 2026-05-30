@@ -14,7 +14,7 @@ let invitationTimer: number | null = null;
 const invitationPollMs = 3000;
 
 async function refreshInvitations() {
-  if (!authState.user) {
+  if (!authState.user || authState.user.is_admin) {
     invitations.value = [];
     return;
   }
@@ -51,10 +51,13 @@ async function respondInvitation(invitation: RoomInvitation, accepted: boolean) 
 initAuth();
 connectPresence();
 watch(
-  () => authState.user?.id,
-  (userId) => {
+  () => [authState.user?.id, router.currentRoute.value.path],
+  ([userId]) => {
     connectPresence();
-    if (userId) startInvitationPolling();
+    if (authState.user?.is_admin && router.currentRoute.value.path !== "/admin") {
+      router.replace("/admin");
+    }
+    if (userId && !authState.user?.is_admin) startInvitationPolling();
     else stopInvitationPolling();
   },
 );

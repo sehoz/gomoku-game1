@@ -11,8 +11,10 @@ export const presenceState = reactive({
 let socket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
 let pollTimer: number | null = null;
+let heartbeatTimer: number | null = null;
 let activeToken = "";
 const fallbackPollMs = 5000;
+const heartbeatMs = 15000;
 
 function clearReconnect() {
   if (reconnectTimer === null) return;
@@ -24,6 +26,12 @@ function clearPoll() {
   if (pollTimer === null) return;
   window.clearInterval(pollTimer);
   pollTimer = null;
+}
+
+function clearHeartbeat() {
+  if (heartbeatTimer === null) return;
+  window.clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
 }
 
 export async function refreshPresence() {
@@ -45,6 +53,10 @@ export function connectPresence() {
   socket.onopen = () => {
     presenceState.connected = true;
     clearPoll();
+    socket?.send(JSON.stringify({ type: "ping" }));
+    heartbeatTimer = window.setInterval(() => {
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "ping" }));
+    }, heartbeatMs);
   };
   socket.onmessage = (event) => {
     const data = JSON.parse(event.data);
@@ -52,6 +64,7 @@ export function connectPresence() {
   };
   socket.onclose = () => {
     presenceState.connected = false;
+    clearHeartbeat();
     if (pollTimer === null) pollTimer = window.setInterval(refreshPresence, fallbackPollMs);
     clearReconnect();
     reconnectTimer = window.setTimeout(connectPresence, authState.user ? 3000 : 6000);
@@ -66,6 +79,7 @@ export function connectPresence() {
 export function disconnectPresence() {
   clearReconnect();
   clearPoll();
+  clearHeartbeat();
   if (socket) {
     socket.onclose = null;
     socket.close();

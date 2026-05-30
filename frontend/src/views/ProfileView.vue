@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { BadgeCheck, ChevronLeft, ChevronRight, Clock3, LogIn, LogOut, RotateCcw, Trophy } from "lucide-vue-next";
+import { computed, onMounted, ref, watch } from "vue";
+import { BadgeCheck, ChevronLeft, ChevronRight, Clock3, LogIn, LogOut, RotateCcw, Save, Trophy, Upload } from "lucide-vue-next";
 import { api } from "../api";
 import AuthModal from "../components/AuthModal.vue";
 import Avatar from "../components/Avatar.vue";
 import GameBoard from "../components/GameBoard.vue";
 import Modal from "../components/Modal.vue";
-import { authState, isAuthenticated, logout } from "../stores/auth";
+import { authState, changePassword, isAuthenticated, logout, updateProfile } from "../stores/auth";
 import type { MatchRecord, MatchReplay } from "../types";
 
 const authOpen = ref(false);
@@ -15,6 +15,11 @@ const historyError = ref("");
 const replay = ref<MatchReplay | null>(null);
 const replayStep = ref(0);
 const replayError = ref("");
+const profileForm = ref({ username: "" });
+const passwordForm = ref({ oldPassword: "", newPassword: "", confirmPassword: "" });
+const profileMessage = ref("");
+const passwordMessage = ref("");
+const avatarPreview = ref("");
 const replayStones = computed(() => replay.value?.moves.slice(0, replayStep.value) || []);
 
 function resultLabel(record: MatchRecord) {
@@ -35,11 +40,58 @@ function formatTime(value: string | null) {
 
 async function loadHistory() {
   if (!isAuthenticated()) return;
+  profileForm.value.username = authState.user?.username || "";
+  avatarPreview.value = authState.user?.avatar_url || "";
   try {
     const data = await api.matchHistory();
     records.value = data.records;
   } catch (err) {
     historyError.value = err instanceof Error ? err.message : "对局记录加载失败";
+  }
+}
+
+function readAvatar(event: Event) {
+  const input = event.target as HTMLInputElement | null;
+  const file = input?.files?.[0];
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    profileMessage.value = "请选择图片文件。";
+    return;
+  }
+  if (file.size > 512 * 1024) {
+    profileMessage.value = "头像文件不能超过 512KB。";
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    avatarPreview.value = String(reader.result || "");
+  };
+  reader.readAsDataURL(file);
+}
+
+async function submitProfile() {
+  if (!isAuthenticated()) return;
+  profileMessage.value = "";
+  try {
+    await updateProfile({ username: profileForm.value.username.trim(), avatar_url: avatarPreview.value });
+    profileMessage.value = "个人资料已更新。";
+  } catch (err) {
+    profileMessage.value = err instanceof Error ? err.message : "资料更新失败";
+  }
+}
+
+async function submitPassword() {
+  passwordMessage.value = "";
+  if (passwordForm.value.newPassword !== passwordForm.value.confirmPassword) {
+    passwordMessage.value = "两次输入的新密码不一致。";
+    return;
+  }
+  try {
+    await changePassword(passwordForm.value.oldPassword, passwordForm.value.newPassword, passwordForm.value.confirmPassword);
+    passwordForm.value = { oldPassword: "", newPassword: "", confirmPassword: "" };
+    passwordMessage.value = "密码已修改。";
+  } catch (err) {
+    passwordMessage.value = err instanceof Error ? err.message : "密码修改失败";
   }
 }
 
@@ -64,6 +116,14 @@ function onReplaySlider(event: Event) {
 }
 
 onMounted(loadHistory);
+watch(
+  () => authState.user?.id,
+  () => {
+    profileForm.value.username = authState.user?.username || "";
+    avatarPreview.value = authState.user?.avatar_url || "";
+    void loadHistory();
+  },
+);
 </script>
 
 <template>
@@ -71,7 +131,7 @@ onMounted(loadHistory);
     <header class="page-header"><div><RouterLink class="back-link" to="/">‹ 返回首页</RouterLink><h1>个人信息</h1><p>{{ isAuthenticated() ? "账号资料和对局统计。" : "当前为游客状态。" }}</p></div></header>
     <section class="profile-layout">
       <div class="profile-card">
-        <Avatar :username="authState.user?.username || '游客'" size="lg" />
+        <Avatar :username="authState.user?.username || '游客'" :avatar-url="authState.user?.avatar_url" size="lg" />
         <div><h2>{{ authState.user?.username || "游客" }}</h2><p>ID：{{ authState.user?.id || "guest" }}</p></div>
         <span class="tag"><BadgeCheck :size="14" />{{ isAuthenticated() ? "已登录" : "游客" }}</span>
         <button v-if="isAuthenticated()" class="secondary-button" type="button" @click="logout"><LogOut :size="18" />退出登录</button>
@@ -82,6 +142,25 @@ onMounted(loadHistory);
         <div><BadgeCheck :size="22" /><span>胜场</span><strong>{{ authState.user?.stats.wins || 0 }}</strong></div>
         <div><BadgeCheck :size="22" /><span>胜率</span><strong>{{ authState.user?.stats.winRate || 0 }}%</strong></div>
       </div>
+      <section v-if="isAuthenticated()" class="history-panel">
+        <div class="section-title-row"><div><h2>账号设置</h2><p>修改头像、用户名和登录密码。</p></div><BadgeCheck :size="22" /></div>
+        <form class="settings-form" @submit.prevent="submitProfile">
+          <div class="profile-edit-row">
+            <Avatar :username="profileForm.username || authState.user?.username || '用户'" :avatar-url="avatarPreview" size="lg" />
+            <label class="upload-button"><Upload :size="18" />上传头像<input accept="image/*" type="file" @change="readAvatar" /></label>
+          </div>
+          <label>用户名<input v-model="profileForm.username" autocomplete="username" /></label>
+          <p v-if="profileMessage" class="form-error">{{ profileMessage }}</p>
+          <button class="primary-button" type="submit"><Save :size="18" />保存资料</button>
+        </form>
+        <form class="settings-form" @submit.prevent="submitPassword">
+          <label>原密码<input v-model="passwordForm.oldPassword" autocomplete="current-password" type="password" /></label>
+          <label>新密码<input v-model="passwordForm.newPassword" autocomplete="new-password" type="password" /></label>
+          <label>确认新密码<input v-model="passwordForm.confirmPassword" autocomplete="new-password" type="password" /></label>
+          <p v-if="passwordMessage" class="form-error">{{ passwordMessage }}</p>
+          <button class="secondary-button" type="submit">修改密码</button>
+        </form>
+      </section>
       <section v-if="isAuthenticated()" class="history-panel">
         <div class="section-title-row"><div><h2>近期对局</h2><p>记录每局开始、结束、对手和结果。</p></div><Clock3 :size="22" /></div>
         <div v-if="historyError" class="game-message warning">{{ historyError }}</div>

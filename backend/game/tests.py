@@ -6,7 +6,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from .ai import choose_ai_move
-from .models import GameSession, Move, Room, SpectatorSeat
+from .models import GameSession, Move, PlayerProfile, Room, SpectatorSeat
 from .rules import evaluate_move
 from .services import (
     SeatSwitchNeedsConsent,
@@ -60,6 +60,61 @@ class AuthEndpointTests(TestCase):
         )
 
         self.assertEqual(response["access-control-allow-origin"], "https://gomoku-example.netlify.app")
+
+    def test_update_profile_and_change_password(self):
+        user = User.objects.create_user(username="alice", password="gomoku123")
+        client = APIClient()
+        client.force_authenticate(user)
+
+        profile_response = client.patch("/api/profile/", {"username": "alice2", "avatar_url": "data:image/png;base64,abc"}, format="json")
+        bad_password = client.post(
+            "/api/profile/password/",
+            {"old_password": "wrong", "new_password": "newpass123", "confirm_password": "newpass123"},
+            format="json",
+        )
+        password_response = client.post(
+            "/api/profile/password/",
+            {"old_password": "gomoku123", "new_password": "newpass123", "confirm_password": "newpass123"},
+            format="json",
+        )
+
+        user.refresh_from_db()
+        self.assertEqual(profile_response.status_code, 200)
+        self.assertEqual(user.username, "alice2")
+        self.assertEqual(user.player_profile.avatar_data_url, "data:image/png;base64,abc")
+        self.assertEqual(bad_password.status_code, 400)
+        self.assertEqual(password_response.status_code, 200)
+        self.assertTrue(User.objects.get(id=user.id).check_password("newpass123"))
+
+    def test_online_users_include_recent_profile_activity(self):
+        user = User.objects.create_user(username="alice", password="gomoku123")
+        admin = User.objects.create_superuser(username="boss", password="gomoku123")
+        PlayerProfile.objects.update_or_create(user=user, defaults={"last_seen_at": timezone.now()})
+        PlayerProfile.objects.update_or_create(user=admin, defaults={"last_seen_at": timezone.now()})
+
+        response = APIClient().get("/api/online/")
+
+        self.assertEqual(response.status_code, 200)
+        usernames = [item["username"] for item in response.data["users"]]
+        self.assertIn("alice", usernames)
+        self.assertNotIn("boss", usernames)
+
+    def test_seeded_admin_can_use_admin_endpoints(self):
+        admin = User.objects.get(username="admin")
+        self.assertTrue(admin.check_password("admin123321"))
+        client = APIClient()
+        client.force_authenticate(admin)
+
+        create_response = client.post("/api/admin/users/", {"username": "managed", "password": "gomoku123"}, format="json")
+        list_response = client.get("/api/admin/users/")
+        room = Room.objects.create(name="后台房间")
+        rooms_response = client.get("/api/admin/rooms/")
+        delete_response = client.delete(f"/api/admin/rooms/{room.id}/")
+
+        self.assertEqual(create_response.status_code, 201)
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(rooms_response.status_code, 200)
+        self.assertEqual(delete_response.status_code, 200)
 
 
 class RuleEngineTests(TestCase):

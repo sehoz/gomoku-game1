@@ -2,6 +2,8 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework import status
@@ -11,11 +13,14 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from .ai import choose_ai_move
-from .models import ChatMessage, GameSession, Room, RoomInvitation
+from .models import ChatMessage, GameSession, PlayerProfile, Room, RoomInvitation
 from .presence import online_users_payload
+from .presence import touch_user
 from .rules import evaluate_move
 from .serializers import (
     ChatMessageSerializer,
+    AdminRoomSerializer,
+    AdminUserSerializer,
     GameReplaySerializer,
     LeaderboardEntrySerializer,
     LoginSerializer,
@@ -61,8 +66,31 @@ def broadcast_room_state(room_id):
 
 
 def token_response(user):
+    touch_user(user.id)
     token, _ = Token.objects.get_or_create(user=user)
     return Response({"token": token.key, "user": UserSerializer(user).data})
+
+
+def admin_required(view_func):
+    def wrapped(request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return Response({"detail": "请先登录"}, status=status.HTTP_401_UNAUTHORIZED)
+        if not (request.user.is_staff or request.user.is_superuser):
+            return Response({"detail": "需要管理员权限"}, status=status.HTTP_403_FORBIDDEN)
+        return view_func(request, *args, **kwargs)
+
+    return wrapped
+
+
+def validate_avatar_data_url(value):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if not value.startswith("data:image/"):
+        raise ValueError("头像必须是图片文件")
+    if len(value) > 700000:
+        raise ValueError("头像文件过大，请选择较小的图片")
+    return value
 
 
 @api_view(["POST"])
@@ -106,7 +134,57 @@ def logout(request):
 def me(request):
     if not request.user.is_authenticated:
         return Response({"user": None})
+    touch_user(request.user.id)
     return Response({"user": UserSerializer(request.user).data})
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+def update_profile(request):
+    username = request.data.get("username")
+    avatar_data_url = request.data.get("avatar_url")
+    update_user_fields = []
+    if username is not None:
+        username = username.strip()
+        if not username:
+            return Response({"detail": "用户名不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+        if User.objects.exclude(id=request.user.id).filter(username__iexact=username).exists():
+            return Response({"detail": "该用户名已经被注册"}, status=status.HTTP_400_BAD_REQUEST)
+        request.user.username = username[:150]
+        update_user_fields.append("username")
+    if update_user_fields:
+        request.user.save(update_fields=update_user_fields)
+    if avatar_data_url is not None:
+        try:
+            profile, _ = PlayerProfile.objects.get_or_create(user=request.user)
+            profile.avatar_data_url = validate_avatar_data_url(avatar_data_url)
+            profile.save(update_fields=["avatar_data_url"])
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+    touch_user(request.user.id)
+    request.user.refresh_from_db()
+    return Response({"user": UserSerializer(request.user).data})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    old_password = request.data.get("old_password", "")
+    new_password = request.data.get("new_password", "")
+    confirm_password = request.data.get("confirm_password", "")
+    if not request.user.check_password(old_password):
+        return Response({"detail": "原密码不正确"}, status=status.HTTP_400_BAD_REQUEST)
+    if new_password != confirm_password:
+        return Response({"detail": "两次输入的新密码不一致"}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        validate_password(new_password, request.user)
+    except ValidationError as exc:
+        return Response({"detail": "；".join(exc.messages)}, status=status.HTTP_400_BAD_REQUEST)
+    request.user.set_password(new_password)
+    request.user.save(update_fields=["password"])
+    Token.objects.filter(user=request.user).delete()
+    token, _ = Token.objects.get_or_create(user=request.user)
+    return Response({"token": token.key, "user": UserSerializer(request.user).data})
 
 
 @api_view(["GET"])
@@ -190,7 +268,7 @@ def match_detail(request, match_id):
 @permission_classes([AllowAny])
 def leaderboard(request):
     entries = []
-    users = User.objects.all().order_by("username")
+    users = User.objects.filter(is_staff=False, is_superuser=False).order_by("username")
     for user in users:
         stats = UserSerializer(user).data["stats"]
         entries.append(
@@ -210,7 +288,99 @@ def leaderboard(request):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def online_users(request):
+    if request.user.is_authenticated:
+        touch_user(request.user.id)
     return Response({"users": online_users_payload()})
+
+
+@api_view(["GET", "POST"])
+@permission_classes([IsAuthenticated])
+@admin_required
+def admin_users(request):
+    if request.method == "GET":
+        users = User.objects.all().order_by("id")
+        return Response({"users": AdminUserSerializer(users, many=True).data})
+    username = (request.data.get("username") or "").strip()
+    password = request.data.get("password") or "gomoku123"
+    if not username:
+        return Response({"detail": "用户名不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+    if User.objects.filter(username__iexact=username).exists():
+        return Response({"detail": "该用户名已经存在"}, status=status.HTTP_400_BAD_REQUEST)
+    user = User.objects.create_user(username=username, password=password)
+    user.email = request.data.get("email", "")
+    user.is_active = bool(request.data.get("is_active", True))
+    user.is_staff = bool(request.data.get("is_staff", False))
+    user.is_superuser = bool(request.data.get("is_superuser", False))
+    user.save(update_fields=["email", "is_active", "is_staff", "is_superuser"])
+    PlayerProfile.objects.get_or_create(user=user)
+    return Response({"user": AdminUserSerializer(user).data}, status=status.HTTP_201_CREATED)
+
+
+@api_view(["GET", "PATCH", "DELETE"])
+@permission_classes([IsAuthenticated])
+@admin_required
+def admin_user_detail(request, user_id):
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({"detail": "用户不存在"}, status=status.HTTP_404_NOT_FOUND)
+    if request.method == "GET":
+        return Response({"user": AdminUserSerializer(user).data})
+    if request.method == "DELETE":
+        if user.id == request.user.id:
+            return Response({"detail": "不能删除当前管理员账号"}, status=status.HTTP_400_BAD_REQUEST)
+        user.delete()
+        return Response({"ok": True})
+
+    username = request.data.get("username")
+    if username is not None:
+        username = username.strip()
+        if not username:
+            return Response({"detail": "用户名不能为空"}, status=status.HTTP_400_BAD_REQUEST)
+        if User.objects.exclude(id=user.id).filter(username__iexact=username).exists():
+            return Response({"detail": "该用户名已经存在"}, status=status.HTTP_400_BAD_REQUEST)
+        user.username = username[:150]
+    for field in ("email", "is_active", "is_staff", "is_superuser"):
+        if field in request.data:
+            setattr(user, field, request.data.get(field))
+    if request.data.get("password"):
+        user.set_password(request.data["password"])
+    user.save()
+    return Response({"user": AdminUserSerializer(user).data})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@admin_required
+def admin_rooms(request):
+    rooms = Room.objects.select_related("black_player", "white_player", "host").prefetch_related("spectators").all().order_by("-created_at")
+    return Response({"rooms": AdminRoomSerializer(rooms, many=True).data})
+
+
+@api_view(["GET", "PATCH", "DELETE"])
+@permission_classes([IsAuthenticated])
+@admin_required
+def admin_room_detail(request, room_id):
+    try:
+        room = Room.objects.get(id=room_id)
+    except Room.DoesNotExist:
+        return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
+    if request.method == "GET":
+        return Response({"room": AdminRoomSerializer(room).data})
+    if request.method == "DELETE":
+        room.delete()
+        broadcast_room_state(room_id)
+        return Response({"ok": True})
+
+    for field in ("name", "rule_set", "status", "move_time_seconds", "total_time_seconds"):
+        if field in request.data:
+            setattr(room, field, request.data.get(field))
+    if "has_password" in request.data:
+        room.set_password(request.data.get("password", "") if request.data.get("has_password") else "")
+    room.last_activity_at = timezone.now()
+    room.save()
+    broadcast_room_state(room.id)
+    return Response({"room": AdminRoomSerializer(room).data})
 
 
 @api_view(["GET"])

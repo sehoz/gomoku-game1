@@ -7,6 +7,8 @@ export interface UserProfile {
   id: number;
   username: string;
   email: string;
+  avatar_url: string;
+  is_admin: boolean;
   stats: {
     totalGames: number;
     wins: number;
@@ -152,4 +154,35 @@ export interface RoomInvitation {
   inviter_username: string;
   status: "pending" | "accepted" | "rejected";
   created_at: string;
+}
+
+export interface AdminUser {
+  id: number;
+  username: string;
+  email: string;
+  is_active: boolean;
+  is_staff: boolean;
+  is_superuser: boolean;
+  avatar_url: string;
+  date_joined: string;
+}
+
+export interface AdminRoom {
+  id: number;
+  name: string;
+  created_at: string;
+  rule_set: RuleSet;
+  status: "waiting" | "playing" | "finished";
+  has_password: boolean;
+  black_player: number | null;
+  black_player_name: string | null;
+  white_player: number | null;
+  white_player_name: string | null;
+  host: number | null;
+  host_name: string | null;
+  players_count: number;
+  spectators_count: number;
+  move_time_seconds: number;
+  total_time_seconds: number;
+  last_activity_at: string;
 }

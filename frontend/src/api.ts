@@ -1,4 +1,6 @@
 import type {
+  AdminRoom,
+  AdminUser,
   AiLevel,
   LeaderboardEntry,
   MatchRecord,
@@ -80,6 +82,12 @@ export const api = {
   async me() {
     return request<{ user: UserProfile | null }>("/auth/me/");
   },
+  async updateProfile(payload: { username?: string; avatar_url?: string }) {
+    return request<{ user: UserProfile }>("/profile/", { method: "PATCH", body: JSON.stringify(payload) });
+  },
+  async changePassword(payload: { old_password: string; new_password: string; confirm_password: string }) {
+    return request<{ token: string; user: UserProfile }>("/profile/password/", { method: "POST", body: JSON.stringify(payload) });
+  },
   async onlineUsers() {
     return request<{ users: OnlineUser[] }>("/online/");
   },
@@ -154,6 +162,27 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ accepted }),
     });
+  },
+  async adminUsers() {
+    return request<{ users: AdminUser[] }>("/admin/users/");
+  },
+  async adminCreateUser(payload: { username: string; password: string; email?: string; is_active?: boolean; is_staff?: boolean; is_superuser?: boolean }) {
+    return request<{ user: AdminUser }>("/admin/users/", { method: "POST", body: JSON.stringify(payload) });
+  },
+  async adminUpdateUser(id: number, payload: Partial<AdminUser> & { password?: string }) {
+    return request<{ user: AdminUser }>(`/admin/users/${id}/`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+  async adminDeleteUser(id: number) {
+    return request<{ ok: boolean }>(`/admin/users/${id}/`, { method: "DELETE" });
+  },
+  async adminRooms() {
+    return request<{ rooms: AdminRoom[] }>("/admin/rooms/");
+  },
+  async adminUpdateRoom(id: number, payload: Partial<AdminRoom> & { password?: string }) {
+    return request<{ room: AdminRoom }>(`/admin/rooms/${id}/`, { method: "PATCH", body: JSON.stringify(payload) });
+  },
+  async adminDeleteRoom(id: number) {
+    return request<{ ok: boolean }>(`/admin/rooms/${id}/`, { method: "DELETE" });
   },
   async soloAiMove(payload: {
     stones: Move[];

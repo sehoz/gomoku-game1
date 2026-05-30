@@ -37,6 +37,17 @@ export async function register(username: string, password: string) {
   authState.user = data.user;
 }
 
+export async function updateProfile(payload: { username?: string; avatar_url?: string }) {
+  const data = await api.updateProfile(payload);
+  authState.user = data.user;
+}
+
+export async function changePassword(old_password: string, new_password: string, confirm_password: string) {
+  const data = await api.changePassword({ old_password, new_password, confirm_password });
+  localStorage.setItem("gomoku_token", data.token);
+  authState.user = data.user;
+}
+
 export async function logout() {
   try {
     if (localStorage.getItem("gomoku_token")) await api.logout();

@@ -2,16 +2,25 @@ from django.contrib.auth.models import User
 from django.db.models import Q
 from rest_framework import serializers
 
-from .models import ChatMessage, GameSession, Move, Room, RoomInvitation
+from .models import ChatMessage, GameSession, Move, PlayerProfile, Room, RoomInvitation
 from .services import decode_pending_request, displayed_time_left
 
 
 class UserSerializer(serializers.ModelSerializer):
     stats = serializers.SerializerMethodField()
+    avatar_url = serializers.SerializerMethodField()
+    is_admin = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ("id", "username", "email", "stats")
+        fields = ("id", "username", "email", "avatar_url", "is_admin", "stats")
+
+    def get_avatar_url(self, user):
+        profile, _ = PlayerProfile.objects.get_or_create(user=user)
+        return profile.avatar_data_url
+
+    def get_is_admin(self, user):
+        return bool(user.is_staff or user.is_superuser)
 
     def get_stats(self, user):
         finished = GameSession.objects.filter(status=GameSession.STATUS_FINISHED, moves__isnull=False).filter(
@@ -190,6 +199,48 @@ class RoomInvitationSerializer(serializers.ModelSerializer):
     class Meta:
         model = RoomInvitation
         fields = ("id", "room", "room_name", "inviter", "inviter_username", "status", "created_at")
+
+
+class AdminUserSerializer(serializers.ModelSerializer):
+    avatar_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ("id", "username", "email", "is_active", "is_staff", "is_superuser", "avatar_url", "date_joined")
+
+    def get_avatar_url(self, user):
+        profile, _ = PlayerProfile.objects.get_or_create(user=user)
+        return profile.avatar_data_url
+
+
+class AdminRoomSerializer(serializers.ModelSerializer):
+    players_count = serializers.IntegerField(read_only=True)
+    spectators_count = serializers.IntegerField(read_only=True)
+    black_player_name = serializers.CharField(source="black_player.username", read_only=True)
+    white_player_name = serializers.CharField(source="white_player.username", read_only=True)
+    host_name = serializers.CharField(source="host.username", read_only=True)
+
+    class Meta:
+        model = Room
+        fields = (
+            "id",
+            "name",
+            "created_at",
+            "rule_set",
+            "status",
+            "has_password",
+            "black_player",
+            "black_player_name",
+            "white_player",
+            "white_player_name",
+            "host",
+            "host_name",
+            "players_count",
+            "spectators_count",
+            "move_time_seconds",
+            "total_time_seconds",
+            "last_activity_at",
+        )
 
 
 class ChatMessageSerializer(serializers.ModelSerializer):

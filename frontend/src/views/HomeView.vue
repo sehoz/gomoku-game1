@@ -71,7 +71,7 @@ onUnmounted(() => {
       </div>
       <div class="home-account-actions">
         <RouterLink class="profile-pill" to="/profile">
-          <Avatar :username="authState.user?.username || '游客'" />
+          <Avatar :username="authState.user?.username || '游客'" :avatar-url="authState.user?.avatar_url" />
           <span>{{ authState.user?.username || "游客" }}</span>
           <UserRound :size="18" />
         </RouterLink>
@@ -106,7 +106,7 @@ onUnmounted(() => {
       <div v-if="presenceState.users.length === 0" class="empty-state">暂无登录玩家在线。</div>
       <div v-else class="online-list">
         <div v-for="user in presenceState.users" :key="user.id" class="online-row">
-          <div class="online-user"><Avatar :username="user.username" /><div><strong>{{ user.username }}</strong><span>ID：{{ user.id }}</span></div></div>
+          <div class="online-user"><Avatar :username="user.username" :avatar-url="user.avatar_url" /><div><strong>{{ user.username }}</strong><span>ID：{{ user.id }}</span></div></div>
           <div class="online-stats"><span><Trophy :size="15" />{{ user.stats.wins }} 胜</span><span>胜率 {{ user.stats.winRate }}%</span></div>
         </div>
       </div>

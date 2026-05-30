@@ -6,6 +6,7 @@ import SoloView from "./views/SoloView.vue";
 import RoomsView from "./views/RoomsView.vue";
 import RoomView from "./views/RoomView.vue";
 import ProfileView from "./views/ProfileView.vue";
+import AdminView from "./views/AdminView.vue";
 import "./styles.css";
 
 const router = createRouter({
@@ -16,6 +17,7 @@ const router = createRouter({
     { path: "/rooms", component: RoomsView },
     { path: "/rooms/:id", component: RoomView },
     { path: "/profile", component: ProfileView },
+    { path: "/admin", component: AdminView },
   ],
 });
 

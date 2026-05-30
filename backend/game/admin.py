@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import ChatMessage, GameSession, Move, Room, RoomInvitation, SpectatorSeat
+from .models import ChatMessage, GameSession, Move, PlayerProfile, Room, RoomInvitation, SpectatorSeat
 
 
 @admin.register(Room)
@@ -33,3 +33,9 @@ class SpectatorSeatAdmin(admin.ModelAdmin):
 @admin.register(RoomInvitation)
 class RoomInvitationAdmin(admin.ModelAdmin):
     list_display = ("room", "inviter", "invitee", "status", "created_at", "responded_at")
+
+
+@admin.register(PlayerProfile)
+class PlayerProfileAdmin(admin.ModelAdmin):
+    list_display = ("user", "last_seen_at")
+    search_fields = ("user__username",)
