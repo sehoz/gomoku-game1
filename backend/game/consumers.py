@@ -11,8 +11,8 @@ from .models import Room
 from .serializers import RoomStateSerializer
 from .services import (
     SeatSwitchNeedsConsent,
-    accept_seat_switch,
-    active_game,
+    accept_pending_seat_switch,
+    accept_pending_undo,
     active_or_latest_game,
     add_chat,
     finish_if_player_timed_out,
@@ -20,11 +20,13 @@ from .services import (
     leave_room,
     mark_room_seen,
     make_move,
+    reject_pending_seat_switch,
+    reject_pending_undo,
+    request_undo,
     set_ready,
+    store_pending_seat_switch,
     switch_position,
     touch_room,
-    undo_last_turn,
-    undo_remaining,
     user_color,
 )
 
@@ -126,17 +128,13 @@ def change_position(room_id, user, target_seat):
         switch_position(Room.objects.get(id=room_id), user, target_seat)
         return {"status": "switched"}
     except SeatSwitchNeedsConsent as exc:
+        store_pending_seat_switch(room_id, exc.request)
         return {"status": "needs_consent", "request": exc.request}
 
 
 @sync_to_async
-def accept_position_request(room_id, request, responder):
-    accept_seat_switch(Room.objects.get(id=room_id), request, responder)
-    return {
-        "requester": request["requester_username"],
-        "from_label": request["from_label"],
-        "target_label": request["target_label"],
-    }
+def accept_position_request(room_id, responder):
+    return accept_pending_seat_switch(Room.objects.get(id=room_id), responder)
 
 
 @sync_to_async
@@ -155,47 +153,22 @@ def leave_current_room(room_id, user):
 
 @sync_to_async
 def create_undo_request(room_id, user):
-    room = Room.objects.get(id=room_id)
-    color = user_color(room, user)
-    if color is None:
-        raise ValueError("你不在该房间")
-    if room.players_count < 2:
-        raise ValueError("等待另一名玩家加入")
-    game = active_game(room)
-    if not game:
-        raise ValueError("当前没有进行中的对局")
-    if not game.moves.filter(player=user).exists():
-        raise ValueError("当前没有可以悔棋的落子")
-    if undo_remaining(game, color) <= 0:
-        raise ValueError("本局悔棋次数已用完")
-    mark_room_seen(room, user)
-    return {"user_id": user.id, "username": user.username, "color": color}
+    return request_undo(Room.objects.get(id=room_id), user)
 
 
 @sync_to_async
-def accept_undo_request(room_id, requester_id, responder):
-    room = Room.objects.get(id=room_id)
-    if user_color(room, responder) is None:
-        raise ValueError("你不在该房间")
-    if requester_id == responder.id:
-        raise ValueError("不能接受自己的悔棋申请")
-    requester = None
-    if room.black_player_id == requester_id:
-        requester = room.black_player
-    elif room.white_player_id == requester_id:
-        requester = room.white_player
-    if requester is None:
-        raise ValueError("申请悔棋的玩家已离开房间")
-    _room, removed = undo_last_turn(room, requester)
-    return {"removed": removed, "requester": requester.username}
+def accept_undo_request(room_id, responder):
+    return accept_pending_undo(Room.objects.get(id=room_id), responder)
 
 
 @sync_to_async
-def reject_undo_request(room_id):
-    try:
-        touch_room(Room.objects.get(id=room_id))
-    except Room.DoesNotExist:
-        pass
+def reject_undo_request(room_id, responder=None):
+    reject_pending_undo(Room.objects.get(id=room_id), responder)
+
+
+@sync_to_async
+def reject_position_request(room_id, responder):
+    return reject_pending_seat_switch(Room.objects.get(id=room_id), responder)
 
 
 @sync_to_async
@@ -272,12 +245,7 @@ class RoomConsumer(AsyncWebsocketConsumer):
                 else:
                     await self.broadcast_state()
             elif event_type == "seat_switch_accept":
-                request = self.pending_seat_switch_requests.get(int(self.room_id))
-                if not request:
-                    await self.send_json({"type": "error", "detail": "当前没有待处理的换位申请"})
-                    return
-                result = await accept_position_request(self.room_id, request, self.user)
-                self.pending_seat_switch_requests.pop(int(self.room_id), None)
+                result = await accept_position_request(self.room_id, self.user)
                 await self.broadcast_state()
                 await self.channel_layer.group_send(
                     self.group_name,
@@ -288,13 +256,9 @@ class RoomConsumer(AsyncWebsocketConsumer):
                     },
                 )
             elif event_type == "seat_switch_reject":
-                request = self.pending_seat_switch_requests.get(int(self.room_id))
+                request = await reject_position_request(self.room_id, self.user)
                 if request:
-                    if request["target_user_id"] != self.user.id:
-                        await self.send_json({"type": "error", "detail": "只有目标位置上的玩家可以拒绝换位"})
-                        return
-                    self.pending_seat_switch_requests.pop(int(self.room_id), None)
-                    await reject_undo_request(self.room_id)
+                    await self.broadcast_state()
                     await self.channel_layer.group_send(
                         self.group_name,
                         {"type": "seat.switch.result", "accepted": False, "detail": f"{self.user.username} 拒绝了换位申请。"},
@@ -312,21 +276,18 @@ class RoomConsumer(AsyncWebsocketConsumer):
             elif event_type == "undo_request":
                 request = await create_undo_request(self.room_id, self.user)
                 self.pending_undo_requests[int(self.room_id)] = request
+                await self.broadcast_state()
                 await self.channel_layer.group_send(self.group_name, {"type": "undo.request", "request": request})
             elif event_type == "undo_accept":
-                request = self.pending_undo_requests.get(int(self.room_id))
-                if not request:
-                    await self.send_json({"type": "error", "detail": "当前没有待处理的悔棋申请"})
-                    return
-                result = await accept_undo_request(self.room_id, request["user_id"], self.user)
+                result = await accept_undo_request(self.room_id, self.user)
                 self.pending_undo_requests.pop(int(self.room_id), None)
                 await self.broadcast_state()
                 await self.channel_layer.group_send(self.group_name, {"type": "undo.result", "accepted": True, "detail": f"{result['requester']} 悔棋成功，已撤销 {result['removed']} 手。"})
             elif event_type == "undo_reject":
                 request = self.pending_undo_requests.pop(int(self.room_id), None)
-                if request:
-                    await reject_undo_request(self.room_id)
-                    await self.channel_layer.group_send(self.group_name, {"type": "undo.result", "accepted": False, "detail": f"{self.user.username} 拒绝了悔棋申请。"})
+                await reject_undo_request(self.room_id, self.user)
+                await self.broadcast_state()
+                await self.channel_layer.group_send(self.group_name, {"type": "undo.result", "accepted": False, "detail": f"{self.user.username} 拒绝了悔棋申请。"})
         except Exception as exc:
             await self.send_json({"type": "error", "detail": str(exc)})
             if hasattr(self, "group_name"):

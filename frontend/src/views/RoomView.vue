@@ -9,7 +9,7 @@ import Modal from "../components/Modal.vue";
 import { authState, isAuthenticated } from "../stores/auth";
 import { playChatSound, playStoneSound } from "../stores/settings";
 import { nextTurn } from "../rules";
-import type { ChatMessage, Move, Room, RoomState, StoneColor } from "../types";
+import type { ChatMessage, Move, Room, RoomState, SeatSwitchRequest, StoneColor, UndoRequest } from "../types";
 
 const route = useRoute();
 const router = useRouter();
@@ -19,17 +19,8 @@ const moves = ref<Move[]>([]);
 const messages = ref<ChatMessage[]>([]);
 const draft = ref("");
 const notice = ref("正在加载房间。");
-const undoRequest = ref<{ user_id: number; username: string; color: StoneColor } | null>(null);
-const seatSwitchRequest = ref<{
-  requester_id: number;
-  requester_username: string;
-  target_user_id: number;
-  target_username: string;
-  from_seat: string;
-  from_label: string;
-  target_seat: string;
-  target_label: string;
-} | null>(null);
+const undoRequest = ref<UndoRequest | null>(null);
+const seatSwitchRequest = ref<SeatSwitchRequest | null>(null);
 const ownUndoPending = ref(false);
 const ownSeatSwitchPending = ref(false);
 const socketConnected = ref(false);
@@ -129,6 +120,39 @@ function readyChanged(before: Room | null, after: Room, color: StoneColor) {
   return color === "black" ? before.black_ready !== after.black_ready : before.white_ready !== after.white_ready;
 }
 
+function syncPendingRequests(nextRoom: Room) {
+  const pendingUndo = nextRoom.pending_undo_request;
+  if (pendingUndo) {
+    if (pendingUndo.user_id === authState.user?.id) {
+      ownUndoPending.value = true;
+      undoRequest.value = null;
+    } else {
+      ownUndoPending.value = false;
+      undoRequest.value = pendingUndo;
+    }
+  } else {
+    ownUndoPending.value = false;
+    undoRequest.value = null;
+  }
+
+  const pendingSwitch = nextRoom.pending_seat_switch_request;
+  if (pendingSwitch) {
+    if (pendingSwitch.requester_id === authState.user?.id) {
+      ownSeatSwitchPending.value = true;
+      seatSwitchRequest.value = null;
+    } else if (pendingSwitch.target_user_id === authState.user?.id) {
+      ownSeatSwitchPending.value = false;
+      seatSwitchRequest.value = pendingSwitch;
+    } else {
+      ownSeatSwitchPending.value = false;
+      seatSwitchRequest.value = null;
+    }
+  } else {
+    ownSeatSwitchPending.value = false;
+    seatSwitchRequest.value = null;
+  }
+}
+
 function applyState(state: RoomState) {
   const previousMoveCount = moves.value.length;
   const previousMessageCount = messages.value.length;
@@ -138,6 +162,7 @@ function applyState(state: RoomState) {
   messages.value = state.messages;
   if (state.moves.length > previousMoveCount) playStoneSound();
   if (previousRoom && state.messages.length > previousMessageCount) playChatSound();
+  syncPendingRequests(state.room);
   if (previousRoom && playerNameChanged(previousRoom, state.room, "black") && state.room.black_player_name) {
     notice.value = `${state.room.black_player_name} 已进入黑棋位置。`;
   } else if (previousRoom && playerNameChanged(previousRoom, state.room, "white") && state.room.white_player_name) {
@@ -160,6 +185,11 @@ function applyState(state: RoomState) {
     notice.value = "双方都准备后对局开始。";
   } else {
     notice.value = `轮到${turn.value === "black" ? "黑棋" : "白棋"}。`;
+  }
+  if (state.room.pending_undo_request && state.room.pending_undo_request.user_id !== authState.user?.id) {
+    notice.value = `${state.room.pending_undo_request.username} 申请悔棋，请处理。`;
+  } else if (state.room.pending_seat_switch_request && state.room.pending_seat_switch_request.target_user_id === authState.user?.id) {
+    notice.value = `${state.room.pending_seat_switch_request.requester_username} 申请与你换位，请处理。`;
   }
 }
 
@@ -303,6 +333,7 @@ async function switchPosition(targetSeat: string) {
     applyState(await api.roomState(roomId));
   } catch (err) {
     notice.value = err instanceof Error ? err.message : "换位失败";
+    void loadState(false);
   }
 }
 
@@ -343,38 +374,60 @@ function requestUndo() {
   }
   ownUndoPending.value = true;
   notice.value = "悔棋申请已发送，等待对方处理。";
-  if (!sendSocket({ type: "undo_request" })) {
+  if (sendSocket({ type: "undo_request" })) return;
+  api.requestUndo(roomId)
+    .then(() => loadState(false))
+    .catch((err) => {
+      ownUndoPending.value = false;
+      notice.value = err instanceof Error ? err.message : "悔棋申请失败";
+    });
+}
+
+async function respondUndo(accepted: boolean) {
+  if (sendSocket({ type: accepted ? "undo_accept" : "undo_reject" })) {
+    if (!accepted) undoRequest.value = null;
+    return;
+  }
+  try {
+    const result = await api.respondUndo(roomId, accepted);
+    notice.value = result.detail;
+    undoRequest.value = null;
+    await loadState(false);
+  } catch (err) {
     ownUndoPending.value = false;
-    notice.value = "连接已断开，暂时不能申请悔棋。";
+    notice.value = err instanceof Error ? err.message : "处理悔棋申请失败";
   }
 }
 
 function acceptUndo() {
-  if (!sendSocket({ type: "undo_accept" })) {
-    notice.value = "连接已断开，暂时不能处理悔棋申请。";
-  }
+  void respondUndo(true);
 }
 
 function rejectUndo() {
-  if (!sendSocket({ type: "undo_reject" })) {
-    notice.value = "连接已断开，暂时不能处理悔棋申请。";
+  void respondUndo(false);
+}
+
+async function respondSeatSwitch(accepted: boolean) {
+  if (sendSocket({ type: accepted ? "seat_switch_accept" : "seat_switch_reject" })) {
+    if (!accepted) seatSwitchRequest.value = null;
     return;
   }
-  undoRequest.value = null;
+  try {
+    const result = await api.respondSeatSwitch(roomId, accepted);
+    notice.value = result.detail;
+    seatSwitchRequest.value = null;
+    await loadState(false);
+  } catch (err) {
+    notice.value = err instanceof Error ? err.message : "处理换位申请失败";
+  }
 }
 
 function acceptSeatSwitch() {
-  if (!sendSocket({ type: "seat_switch_accept" })) {
-    notice.value = "连接已断开，暂时不能处理换位申请。";
-  }
+  void respondSeatSwitch(true);
 }
 
 function rejectSeatSwitch() {
-  if (!sendSocket({ type: "seat_switch_reject" })) {
-    notice.value = "连接已断开，暂时不能处理换位申请。";
-    return;
-  }
-  seatSwitchRequest.value = null;
+  void respondSeatSwitch(false);
 }
 
 async function leave() {
@@ -408,26 +461,26 @@ onUnmounted(() => {
     <header class="page-header"><div><button class="link-button" type="button" @click="leave">‹ 返回房间</button><h1>{{ room?.name || "房间" }}</h1><p>黑棋在上，白棋在下；两名玩家都准备后开始。</p></div><div class="header-actions"><button class="secondary-button" type="button" @click="leave"><LogOut :size="18" />离开房间</button></div></header>
     <section class="game-layout">
       <div class="board-panel">
-        <div class="game-message room-notice" :class="{ warning: notice.includes('失败') || notice.includes('断开') || notice.includes('不能') || notice.includes('用完') }">{{ notice }}</div>
-        <div class="board-statusline">
-          <div><span class="status-label">规则</span><strong>{{ room?.rule_set === "renju" ? "有禁手" : "无禁手" }}</strong></div>
-          <div>
+        <div class="board-controlbar">
+          <div class="control-notice" :class="{ warning: notice.includes('失败') || notice.includes('断开') || notice.includes('不能') || notice.includes('用完') }">{{ notice }}</div>
+          <div class="control-item"><span class="status-label">规则</span><strong>{{ room?.rule_set === "renju" ? "有禁手" : "无禁手" }}</strong></div>
+          <div class="control-item">
             <span class="status-label">我的位置</span>
             <strong class="stone-status">
               <span v-if="myRoleColor" :class="['stone-icon', `stone-icon-${myRoleColor}`]" />
               <span>{{ myRoleLabel }}</span>
             </strong>
           </div>
-          <div>
+          <div class="control-item">
             <span class="status-label">当前回合</span>
             <strong class="stone-status"><span :class="['stone-icon', `stone-icon-${turn}`]" />{{ turnLabel }}</strong>
           </div>
-          <div><span class="status-label">步时</span><strong>{{ formatSeconds(stepTimeLeft) }}</strong></div>
-          <div><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
-        </div>
-        <div class="game-actions">
-          <button class="primary-button" :disabled="!canReady" type="button" @click="toggleReady"><Check :size="18" />{{ myReady ? "取消准备" : "准备" }}</button>
-          <button class="secondary-button" :disabled="!activeGame || !myColor || ownUndoPending" type="button" @click="requestUndo"><Undo2 :size="18" />{{ ownUndoPending ? "等待回应" : `悔棋（${myUndoRemaining}）` }}</button>
+          <div class="control-item"><span class="status-label">步时</span><strong>{{ formatSeconds(stepTimeLeft) }}</strong></div>
+          <div class="control-item"><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
+          <div class="control-actions">
+            <button class="primary-button" :disabled="!canReady" type="button" @click="toggleReady"><Check :size="18" />{{ myReady ? "取消准备" : "准备" }}</button>
+            <button class="secondary-button" :disabled="!activeGame || !myColor || ownUndoPending" type="button" @click="requestUndo"><Undo2 :size="18" />{{ ownUndoPending ? "等待回应" : `悔棋（${myUndoRemaining}）` }}</button>
+          </div>
         </div>
         <GameBoard :stones="moves" :interactive="canMove" @play="play" />
       </div>

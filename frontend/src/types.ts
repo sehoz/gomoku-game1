@@ -40,6 +40,25 @@ export interface Room {
   white_ready: boolean;
   white_undo_remaining: number;
   winner: string;
+  pending_undo_request: UndoRequest | null;
+  pending_seat_switch_request: SeatSwitchRequest | null;
+}
+
+export interface UndoRequest {
+  user_id: number;
+  username: string;
+  color: StoneColor;
+}
+
+export interface SeatSwitchRequest {
+  requester_id: number;
+  requester_username: string;
+  target_user_id: number;
+  target_username: string;
+  from_seat: string;
+  from_label: string;
+  target_seat: string;
+  target_label: string;
 }
 
 export interface CurrentGame {

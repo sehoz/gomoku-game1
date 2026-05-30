@@ -143,20 +143,22 @@ function undo() {
   <main class="page-shell">
     <header class="page-header">
       <div><RouterLink class="back-link" to="/">‹ 返回首页</RouterLink><h1>单机对战</h1><p>支持无禁手/有禁手规则、AI 强度和玩家棋色。</p></div>
-      <div class="header-actions">
-        <button class="secondary-button" type="button" @click="undo"><Undo2 :size="18" />悔棋</button>
-        <button class="secondary-button" type="button" @click="reset"><RotateCcw :size="18" />重新开始</button>
-      </div>
     </header>
     <section class="game-layout">
       <div class="board-panel">
-        <div class="board-toolbar">
-          <div><span class="status-label">当前回合</span><strong>{{ turn === "black" ? "黑棋" : "白棋" }}</strong></div>
-          <div><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
-          <div><span class="status-label">落子数</span><strong>{{ stones.length }}</strong></div>
+        <div class="board-controlbar">
+          <div class="control-notice" :class="{ warning: message.includes('不可') || message.includes('不能') }">{{ message }}</div>
+          <div class="control-item"><span class="status-label">规则</span><strong>{{ ruleSet === "renju" ? "有禁手" : "无禁手" }}</strong></div>
+          <div class="control-item"><span class="status-label">我的位置</span><strong class="stone-status"><span :class="['stone-icon', `stone-icon-${playerColor}`]" />{{ playerColor === "black" ? "黑棋" : "白棋" }}</strong></div>
+          <div class="control-item"><span class="status-label">当前回合</span><strong class="stone-status"><span :class="['stone-icon', `stone-icon-${turn}`]" />{{ turn === "black" ? "黑棋" : "白棋" }}</strong></div>
+          <div class="control-item"><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
+          <div class="control-item"><span class="status-label">落子数</span><strong>{{ stones.length }}</strong></div>
+          <div class="control-actions">
+            <button class="secondary-button" type="button" @click="undo"><Undo2 :size="18" />悔棋</button>
+            <button class="secondary-button" type="button" @click="reset"><RotateCcw :size="18" />重新开始</button>
+          </div>
         </div>
         <GameBoard :stones="stones" :interactive="playerTurn" @play="play" />
-        <div class="game-message" :class="{ warning: message.includes('不可') || message.includes('不能') }">{{ message }}</div>
       </div>
       <aside class="settings-panel">
         <h2>对局参数</h2>

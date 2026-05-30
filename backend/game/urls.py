@@ -18,5 +18,8 @@ urlpatterns = [
     path("rooms/<int:room_id>/ready/", views.ready_view),
     path("rooms/<int:room_id>/move/", views.move_view),
     path("rooms/<int:room_id>/chat/", views.chat_view),
+    path("rooms/<int:room_id>/undo/request/", views.undo_request_view),
+    path("rooms/<int:room_id>/undo/respond/", views.undo_response_view),
+    path("rooms/<int:room_id>/seat-switch/respond/", views.seat_switch_response_view),
     path("solo/ai-move/", views.solo_ai_move),
 ]

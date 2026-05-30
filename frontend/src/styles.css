@@ -50,9 +50,13 @@ p { color: var(--muted); line-height: 1.65; }
 .mode-icon, .room-icon { display: inline-flex; align-items: center; justify-content: center; width: 56px; height: 56px; border-radius: 8px; background: #e0f2f1; color: var(--accent-strong); }
 
 .board-toolbar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.board-statusline { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.board-controlbar { display: grid; grid-template-columns: minmax(220px, 1.4fr) repeat(5, minmax(92px, .7fr)) auto; gap: 8px; align-items: stretch; margin-bottom: 14px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-strong); }
+.control-item, .control-notice, .control-actions { display: grid; align-content: center; min-height: 58px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.86); }
+.control-notice { color: var(--accent-strong); font-weight: 900; line-height: 1.45; }
+.control-notice.warning { border-color: rgba(154,52,18,.28); background: #fff7ed; color: var(--warning); }
+.control-actions { grid-auto-flow: column; align-items: center; gap: 8px; }
 .profile-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.board-toolbar > div, .board-statusline > div, .profile-stats > div { padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.78); }
+.board-toolbar > div, .profile-stats > div { padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.78); }
 .game-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 14px 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-strong); }
 
 .primary-button, .secondary-button, .icon-button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; border-radius: 8px; border: 1px solid transparent; cursor: pointer; font-weight: 900; }
@@ -146,6 +150,7 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 18px 0; }
 .modal-form, .settings-form { display: grid; gap: 14px; padding: 18px; }
 .modal-form label { display: grid; gap: 8px; font-weight: 800; }
+.form-subtitle { margin-top: 2px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--accent-strong); font-weight: 900; }
 .checkbox-row, .switch-row { display: flex !important; align-items: center; justify-content: space-between; gap: 10px !important; }
 .auth-tabs { display: grid; grid-template-columns: repeat(2, 1fr); overflow: hidden; border: 1px solid var(--line); border-radius: 8px; }
 .auth-tabs button { min-height: 40px; border: 0; background: var(--surface-strong); font-weight: 800; }
@@ -171,6 +176,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 
 @media (max-width: 920px) {
   .home-grid, .game-layout { grid-template-columns: 1fr; }
+  .board-controlbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .control-notice, .control-actions { grid-column: 1 / -1; }
   .room-row, .history-row { grid-template-columns: 1fr; align-items: stretch; }
   .room-meta { justify-content: flex-start; }
 }
@@ -179,7 +186,9 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   .home-page, .page-shell { width: auto; margin: 0 10px; padding: 18px 0; }
   h1 { font-size: 32px; }
   .home-topbar, .page-header, .home-account-actions, .profile-card, .seat-row, .header-actions { flex-direction: column; align-items: stretch; }
-  .board-toolbar, .board-statusline, .profile-stats { grid-template-columns: 1fr; }
+  .board-toolbar, .board-controlbar, .profile-stats { grid-template-columns: 1fr; }
+  .control-notice, .control-actions { grid-column: auto; }
+  .control-actions { grid-auto-flow: row; }
   .online-row { flex-direction: column; align-items: stretch; }
   .online-stats { justify-content: flex-start; }
   .global-settings-button { right: 14px; bottom: 14px; min-height: 48px; padding: 0 14px; }

@@ -58,6 +58,8 @@ class Room(models.Model):
     black_last_seen_at = models.DateTimeField(null=True, blank=True)
     white_last_seen_at = models.DateTimeField(null=True, blank=True)
     last_activity_at = models.DateTimeField(default=timezone.now)
+    pending_undo_request = models.TextField(blank=True)
+    pending_seat_switch_request = models.TextField(blank=True)
 
     class Meta:
         ordering = ["-created_at"]
@@ -145,7 +147,7 @@ class Move(models.Model):
         (COLOR_WHITE, "白棋"),
     )
 
-    room = models.ForeignKey(Room, related_name="moves", on_delete=models.CASCADE)
+    room = models.ForeignKey(Room, null=True, blank=True, related_name="moves", on_delete=models.SET_NULL)
     game = models.ForeignKey(GameSession, related_name="moves", null=True, blank=True, on_delete=models.CASCADE)
     player = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     move_number = models.PositiveIntegerField()

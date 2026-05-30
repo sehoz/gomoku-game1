@@ -3,7 +3,7 @@ from django.db.models import Q
 from rest_framework import serializers
 
 from .models import ChatMessage, GameSession, Move, Room
-from .services import displayed_time_left
+from .services import decode_pending_request, displayed_time_left
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -53,6 +53,8 @@ class RoomSerializer(serializers.ModelSerializer):
     current_game = serializers.SerializerMethodField()
     black_undo_remaining = serializers.SerializerMethodField()
     white_undo_remaining = serializers.SerializerMethodField()
+    pending_undo_request = serializers.SerializerMethodField()
+    pending_seat_switch_request = serializers.SerializerMethodField()
     black_player_name = serializers.CharField(source="black_player.username", read_only=True)
     white_player_name = serializers.CharField(source="white_player.username", read_only=True)
 
@@ -82,6 +84,8 @@ class RoomSerializer(serializers.ModelSerializer):
             "white_ready",
             "white_undo_remaining",
             "winner",
+            "pending_undo_request",
+            "pending_seat_switch_request",
         )
         read_only_fields = ("id", "created_at", "status", "winner")
 
@@ -128,6 +132,12 @@ class RoomSerializer(serializers.ModelSerializer):
     def get_white_undo_remaining(self, room):
         game = room.current_game
         return max(3 - game.white_undo_used, 0) if game and game.status == GameSession.STATUS_PLAYING else 3
+
+    def get_pending_undo_request(self, room):
+        return decode_pending_request(room.pending_undo_request)
+
+    def get_pending_seat_switch_request(self, room):
+        return decode_pending_request(room.pending_seat_switch_request)
 
 
 class MatchRecordSerializer(serializers.Serializer):

@@ -1,4 +1,4 @@
-import type { AiLevel, MatchRecord, Move, OnlineUser, Room, RoomState, RuleSet, StoneColor, UserProfile } from "./types";
+import type { AiLevel, MatchRecord, Move, OnlineUser, Room, RoomState, RuleSet, SeatSwitchRequest, StoneColor, UndoRequest, UserProfile } from "./types";
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 const wsBase = import.meta.env.VITE_WS_BASE_URL || "ws://localhost:8000/ws";
@@ -84,6 +84,18 @@ export const api = {
   },
   async chat(id: number, text: string) {
     return request(`/rooms/${id}/chat/`, { method: "POST", body: JSON.stringify({ text }) });
+  },
+  async requestUndo(id: number) {
+    return request<{ request: UndoRequest }>(`/rooms/${id}/undo/request/`, { method: "POST" });
+  },
+  async respondUndo(id: number, accepted: boolean) {
+    return request<{ accepted: boolean; detail: string }>(`/rooms/${id}/undo/respond/`, { method: "POST", body: JSON.stringify({ accepted }) });
+  },
+  async respondSeatSwitch(id: number, accepted: boolean) {
+    return request<{ accepted: boolean; detail: string; request?: SeatSwitchRequest }>(`/rooms/${id}/seat-switch/respond/`, {
+      method: "POST",
+      body: JSON.stringify({ accepted }),
+    });
   },
   async soloAiMove(payload: {
     stones: Move[];

@@ -156,6 +156,7 @@ onUnmounted(() => {
         <p v-if="createError" class="form-error">{{ createError }}</p>
         <label>房间名<input v-model="form.name" /></label>
         <label>规则<select v-model="form.rule_set"><option value="standard">无禁手</option><option value="renju">有禁手</option></select></label>
+        <div class="form-subtitle">计时设置</div>
         <label>每步限时<select v-model.number="form.move_time_seconds"><option :value="15">15 秒</option><option :value="30">30 秒</option><option :value="60">60 秒</option><option :value="120">120 秒</option></select></label>
         <label>每方局时<select v-model.number="form.total_time_minutes"><option :value="5">5 分钟</option><option :value="10">10 分钟</option><option :value="15">15 分钟</option><option :value="30">30 分钟</option></select></label>
         <label class="checkbox-row"><input v-model="form.has_password" type="checkbox" />设置密码</label>

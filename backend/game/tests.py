@@ -13,6 +13,7 @@ from .services import (
     accept_seat_switch,
     add_chat,
     cleanup_idle_rooms,
+    decode_pending_request,
     join_room,
     leave_room,
     make_move,
@@ -167,6 +168,20 @@ class RoomLifecycleTests(TestCase):
 
         self.assertEqual(removed, 1)
         self.assertEqual(room.moves.count(), 0)
+
+    def test_undo_request_is_visible_in_room_state(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = self.playable_room(black, white)
+        make_move(room, black, 7, 7)
+        client = APIClient()
+        client.force_authenticate(black)
+
+        response = client.post(f"/api/rooms/{room.id}/undo/request/", {}, format="json")
+        state = client.get(f"/api/rooms/{room.id}/state/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(state.data["room"]["pending_undo_request"]["username"], "black")
 
     def test_undo_after_opponent_response_removes_two_stones(self):
         black = User.objects.create_user(username="black", password="gomoku123")
@@ -364,6 +379,19 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(room.black_player, white)
         self.assertEqual(room.white_player, black)
 
+    def test_seat_switch_request_is_persisted_for_polling(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = Room.objects.create(name="测试房间", black_player=black, white_player=white)
+        client = APIClient()
+        client.force_authenticate(black)
+
+        response = client.post(f"/api/rooms/{room.id}/switch-seat/", {"target_seat": "white"}, format="json")
+        room.refresh_from_db()
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(decode_pending_request(room.pending_seat_switch_request)["requester_username"], "black")
+
     def test_player_cannot_switch_after_start_but_spectator_can(self):
         black = User.objects.create_user(username="black", password="gomoku123")
         white = User.objects.create_user(username="white", password="gomoku123")
@@ -387,3 +415,21 @@ class RoomLifecycleTests(TestCase):
 
         self.assertEqual(deleted, 1)
         self.assertFalse(Room.objects.filter(id=room.id).exists())
+
+    @override_settings(ROOM_IDLE_MINUTES=5)
+    def test_cleanup_idle_waiting_room_even_after_finished_game(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = self.playable_room(black, white)
+        for x in range(4):
+            make_move(room, black, x, 0)
+            make_move(room, white, x, 1)
+        make_move(room, black, 4, 0)
+        Room.objects.filter(id=room.id).update(last_activity_at=timezone.now() - timedelta(minutes=8))
+
+        deleted = cleanup_idle_rooms()
+
+        self.assertEqual(deleted, 1)
+        self.assertFalse(Room.objects.filter(id=room.id).exists())
+        self.assertEqual(GameSession.objects.count(), 1)
+        self.assertEqual(GameSession.objects.first().moves.count(), 9)

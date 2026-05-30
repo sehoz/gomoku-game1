@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 from django.conf import settings
@@ -14,6 +15,21 @@ class SeatSwitchNeedsConsent(ValueError):
     def __init__(self, request):
         super().__init__("目标位置已有玩家，需要对方同意")
         self.request = request
+
+
+def encode_pending_request(request):
+    return json.dumps(request, ensure_ascii=False) if request else ""
+
+
+def decode_pending_request(raw):
+    if not raw:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def spectator_number_from_key(value):
@@ -213,8 +229,21 @@ def finish_game(room, winner="", reason="finished"):
         room.status = Room.STATUS_WAITING
         room.black_ready = False
         room.white_ready = False
+        room.pending_undo_request = ""
+        room.pending_seat_switch_request = ""
         room.last_activity_at = now
-        room.save(update_fields=["current_game", "winner", "status", "black_ready", "white_ready", "last_activity_at"])
+        room.save(
+            update_fields=[
+                "current_game",
+                "winner",
+                "status",
+                "black_ready",
+                "white_ready",
+                "pending_undo_request",
+                "pending_seat_switch_request",
+                "last_activity_at",
+            ]
+        )
         game.delete()
         return room
     game.winner = winner or ""
@@ -226,8 +255,20 @@ def finish_game(room, winner="", reason="finished"):
     room.status = Room.STATUS_WAITING
     room.black_ready = False
     room.white_ready = False
+    room.pending_undo_request = ""
+    room.pending_seat_switch_request = ""
     room.last_activity_at = now
-    room.save(update_fields=["winner", "status", "black_ready", "white_ready", "last_activity_at"])
+    room.save(
+        update_fields=[
+            "winner",
+            "status",
+            "black_ready",
+            "white_ready",
+            "pending_undo_request",
+            "pending_seat_switch_request",
+            "last_activity_at",
+        ]
+    )
     return room
 
 
@@ -305,7 +346,6 @@ def cleanup_idle_rooms():
     cutoff = timezone.now() - timedelta(minutes=getattr(settings, "ROOM_IDLE_MINUTES", 5))
     deleted = Room.objects.filter(
         status=Room.STATUS_WAITING,
-        games__isnull=True,
         last_activity_at__lt=cutoff,
     ).delete()[0]
     for room in Room.objects.filter(status=Room.STATUS_PLAYING, last_activity_at__lt=cutoff):
@@ -437,6 +477,15 @@ def leave_room(room, user):
         room.black_ready = False
         room.white_ready = False
     room.spectators.filter(user=user).delete()
+    pending_undo = decode_pending_request(room.pending_undo_request)
+    pending_switch = decode_pending_request(room.pending_seat_switch_request)
+    if pending_undo and int(pending_undo.get("user_id", 0)) == user.id:
+        room.pending_undo_request = ""
+    if pending_switch and (
+        int(pending_switch.get("requester_id", 0)) == user.id
+        or int(pending_switch.get("target_user_id", 0)) == user.id
+    ):
+        room.pending_seat_switch_request = ""
     if room.occupants_count == 0:
         room.delete()
         return None
@@ -621,6 +670,103 @@ def undo_last_turn(room, requester):
     room.last_activity_at = timezone.now()
     room.save(update_fields=["status", "winner", "last_activity_at"])
     return room, len(delete_ids)
+
+
+@transaction.atomic
+def request_undo(room, user):
+    room = Room.objects.select_for_update().get(id=room.id)
+    color = user_color(room, user)
+    if color is None:
+        raise ValueError("你不在该房间")
+    if room.players_count < 2:
+        raise ValueError("等待另一名玩家加入")
+    game = active_game(room)
+    if not game:
+        raise ValueError("当前没有进行中的对局")
+    if not game.moves.filter(player=user).exists():
+        raise ValueError("当前没有可以悔棋的落子")
+    if undo_remaining(game, color) <= 0:
+        raise ValueError("本局悔棋次数已用完")
+    request = {"user_id": user.id, "username": user.username, "color": color}
+    room.pending_undo_request = encode_pending_request(request)
+    room.last_activity_at = timezone.now()
+    room.save(update_fields=["pending_undo_request", "last_activity_at"])
+    mark_room_seen(room, user)
+    return request
+
+
+@transaction.atomic
+def accept_pending_undo(room, responder):
+    room = Room.objects.select_for_update().get(id=room.id)
+    request = decode_pending_request(room.pending_undo_request)
+    if not request:
+        raise ValueError("当前没有待处理的悔棋申请")
+    requester_id = int(request["user_id"])
+    if user_color(room, responder) is None:
+        raise ValueError("你不在该房间")
+    if requester_id == responder.id:
+        raise ValueError("不能接受自己的悔棋申请")
+    requester = None
+    if room.black_player_id == requester_id:
+        requester = room.black_player
+    elif room.white_player_id == requester_id:
+        requester = room.white_player
+    if requester is None:
+        raise ValueError("申请悔棋的玩家已离开房间")
+    _room, removed = undo_last_turn(room, requester)
+    room = Room.objects.select_for_update().get(id=room.id)
+    room.pending_undo_request = ""
+    room.last_activity_at = timezone.now()
+    room.save(update_fields=["pending_undo_request", "last_activity_at"])
+    return {"removed": removed, "requester": requester.username}
+
+
+@transaction.atomic
+def reject_pending_undo(room, responder=None):
+    room = Room.objects.select_for_update().get(id=room.id)
+    request = decode_pending_request(room.pending_undo_request)
+    if responder and request and int(request.get("user_id", 0)) == responder.id:
+        raise ValueError("不能拒绝自己的悔棋申请")
+    room.pending_undo_request = ""
+    room.last_activity_at = timezone.now()
+    room.save(update_fields=["pending_undo_request", "last_activity_at"])
+    return room
+
+
+def store_pending_seat_switch(room_id, request):
+    Room.objects.filter(id=room_id).update(pending_seat_switch_request=encode_pending_request(request), last_activity_at=timezone.now())
+    return request
+
+
+@transaction.atomic
+def accept_pending_seat_switch(room, responder):
+    room = Room.objects.select_for_update().get(id=room.id)
+    request = decode_pending_request(room.pending_seat_switch_request)
+    if not request:
+        raise ValueError("当前没有待处理的换位申请")
+    result_room = accept_seat_switch(room, request, responder)
+    result_room.pending_seat_switch_request = ""
+    result_room.last_activity_at = timezone.now()
+    result_room.save(update_fields=["pending_seat_switch_request", "last_activity_at"])
+    return {
+        "requester": request["requester_username"],
+        "from_label": request["from_label"],
+        "target_label": request["target_label"],
+    }
+
+
+@transaction.atomic
+def reject_pending_seat_switch(room, responder):
+    room = Room.objects.select_for_update().get(id=room.id)
+    request = decode_pending_request(room.pending_seat_switch_request)
+    if not request:
+        return None
+    if int(request["target_user_id"]) != responder.id:
+        raise ValueError("只有目标位置上的玩家可以拒绝换位")
+    room.pending_seat_switch_request = ""
+    room.last_activity_at = timezone.now()
+    room.save(update_fields=["pending_seat_switch_request", "last_activity_at"])
+    return request
 
 
 def add_chat(room, user, text):

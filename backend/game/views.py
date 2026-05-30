@@ -32,8 +32,14 @@ from .services import (
     join_room,
     leave_room,
     make_move,
+    accept_pending_seat_switch,
+    accept_pending_undo,
+    reject_pending_seat_switch,
+    reject_pending_undo,
+    request_undo,
     room_stones,
     set_ready,
+    store_pending_seat_switch,
     switch_position,
 )
 
@@ -263,6 +269,8 @@ def switch_seat_view(request, room_id):
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
     except SeatSwitchNeedsConsent as exc:
+        store_pending_seat_switch(room_id, exc.request)
+        broadcast_room_state(room_id)
         return Response({"detail": str(exc), "request": exc.request}, status=status.HTTP_409_CONFLICT)
     except ValueError as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
@@ -306,6 +314,55 @@ def chat_view(request, room_id):
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
     except ValueError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def undo_request_view(request, room_id):
+    try:
+        undo = request_undo(Room.objects.get(id=room_id), request.user)
+        broadcast_room_state(room_id)
+        return Response({"request": undo})
+    except Room.DoesNotExist:
+        return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
+    except ValueError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def undo_response_view(request, room_id):
+    try:
+        if request.data.get("accepted"):
+            result = accept_pending_undo(Room.objects.get(id=room_id), request.user)
+            broadcast_room_state(room_id)
+            return Response({"accepted": True, "detail": f"{result['requester']} 悔棋成功，已撤销 {result['removed']} 手。"})
+        reject_pending_undo(Room.objects.get(id=room_id), request.user)
+        broadcast_room_state(room_id)
+        return Response({"accepted": False, "detail": f"{request.user.username} 拒绝了悔棋申请。"})
+    except Room.DoesNotExist:
+        return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
+    except ValueError as exc:
+        broadcast_room_state(room_id)
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def seat_switch_response_view(request, room_id):
+    try:
+        if request.data.get("accepted"):
+            result = accept_pending_seat_switch(Room.objects.get(id=room_id), request.user)
+            broadcast_room_state(room_id)
+            return Response({"accepted": True, "detail": f"{result['requester']} 已换到{result['target_label']}。"})
+        reject_pending_seat_switch(Room.objects.get(id=room_id), request.user)
+        broadcast_room_state(room_id)
+        return Response({"accepted": False, "detail": f"{request.user.username} 拒绝了换位申请。"})
+    except Room.DoesNotExist:
+        return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
+    except ValueError as exc:
+        broadcast_room_state(room_id)
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
