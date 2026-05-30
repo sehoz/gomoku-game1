@@ -28,6 +28,8 @@ export interface Room {
   max_players: number;
   spectators_count: number;
   max_spectators: number;
+  move_time_seconds: number;
+  total_time_seconds: number;
   spectators: SpectatorSeat[];
   black_player: number | null;
   black_player_name: string | null;
@@ -47,6 +49,11 @@ export interface CurrentGame {
   end_reason: string;
   started_at: string;
   ended_at: string | null;
+  move_time_seconds: number;
+  total_time_seconds: number;
+  black_time_left_seconds: number;
+  white_time_left_seconds: number;
+  turn_started_at: string | null;
 }
 
 export interface SpectatorSeat {

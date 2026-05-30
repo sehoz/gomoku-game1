@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Bot, LogIn, RefreshCw, Swords, UserRound, UsersRound, Trophy } from "lucide-vue-next";
+import { api } from "../api";
 import AuthModal from "../components/AuthModal.vue";
 import Avatar from "../components/Avatar.vue";
 import { authState, isAuthenticated } from "../stores/auth";
@@ -10,6 +11,8 @@ import { presenceState, refreshPresence } from "../stores/presence";
 const router = useRouter();
 const authOpen = ref(false);
 const refreshingOnline = ref(false);
+const roomCount = ref(0);
+let roomCountTimer: number | null = null;
 
 function enterOnline() {
   if (!isAuthenticated()) {
@@ -27,6 +30,24 @@ async function refreshOnline() {
     refreshingOnline.value = false;
   }
 }
+
+async function refreshRoomCount() {
+  try {
+    const data = await api.roomCount();
+    roomCount.value = data.count;
+  } catch {
+    roomCount.value = 0;
+  }
+}
+
+onMounted(() => {
+  void refreshRoomCount();
+  roomCountTimer = window.setInterval(refreshRoomCount, 1000);
+});
+
+onUnmounted(() => {
+  if (roomCountTimer !== null) window.clearInterval(roomCountTimer);
+});
 </script>
 
 <template>
@@ -53,7 +74,10 @@ async function refreshOnline() {
       </RouterLink>
       <button class="mode-card mode-button" :class="{ locked: !isAuthenticated() }" type="button" @click="enterOnline">
         <span class="mode-icon"><UsersRound :size="28" /></span>
-        <span><strong>联机对战</strong><small>{{ isAuthenticated() ? "创建或加入联机房间" : "登录后可进入联机房间" }}</small></span>
+        <span>
+          <strong>联机对战 <em class="mode-count">{{ roomCount }} 个房间</em></strong>
+          <small>{{ isAuthenticated() ? "创建或加入联机房间" : "登录后可进入联机房间" }}</small>
+        </span>
         <Swords :size="22" />
       </button>
     </section>

@@ -61,8 +61,9 @@ function hasFour(cells: string[]) {
 }
 
 function hasThree(cells: string[]) {
-  const patterns = new Set([".BBB.", ".BB.B.", ".B.BB."]);
-  for (let size = 5; size <= 6; size += 1) {
+  const patterns = new Set([".BBB.", ".BB.B.", ".B.BB.", ".B.B.B."]);
+  const sizes = new Set(Array.from(patterns).map((pattern) => pattern.length));
+  for (const size of sizes) {
     for (let i = 0; i <= cells.length - size; i += 1) {
       if (i <= 5 && 5 < i + size && patterns.has(cells.slice(i, i + size).join(""))) return true;
     }

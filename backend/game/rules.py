@@ -70,8 +70,8 @@ def has_four_threat(cells, center):
 
 
 def has_open_three(cells, center):
-    patterns = {".BBB.", ".BB.B.", ".B.BB."}
-    for size in (5, 6):
+    patterns = {".BBB.", ".BB.B.", ".B.BB.", ".B.B.B."}
+    for size in {len(pattern) for pattern in patterns}:
         for start in range(0, len(cells) - size + 1):
             if window_includes_center(start, size, center) and "".join(cells[start : start + size]) in patterns:
                 return True

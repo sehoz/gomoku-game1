@@ -20,6 +20,11 @@ const starPoints = computed(() => {
 function stoneAt(x: number, y: number) {
   return props.stones.find((stone) => stone.x === x && stone.y === y);
 }
+
+function isLastStone(x: number, y: number) {
+  const last = props.stones[props.stones.length - 1];
+  return Boolean(last && last.x === x && last.y === y);
+}
 </script>
 
 <template>
@@ -43,7 +48,11 @@ function stoneAt(x: number, y: number) {
       >
         <span
           v-if="stoneAt((index - 1) % boardSize, Math.floor((index - 1) / boardSize))"
-          :class="['stone', `stone-${stoneAt((index - 1) % boardSize, Math.floor((index - 1) / boardSize))?.color}`]"
+          :class="[
+            'stone',
+            `stone-${stoneAt((index - 1) % boardSize, Math.floor((index - 1) / boardSize))?.color}`,
+            { 'stone-last': isLastStone((index - 1) % boardSize, Math.floor((index - 1) / boardSize)) },
+          ]"
         />
       </button>
     </div>

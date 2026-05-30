@@ -124,6 +124,19 @@ class AiTests(TestCase):
         self.assertTrue(result.forbidden)
         self.assertEqual(result.winner, "white")
 
+    def test_renju_black_double_jump_three_loses(self):
+        stones = [
+            {"x": 5, "y": 7, "color": "black"},
+            {"x": 9, "y": 7, "color": "black"},
+            {"x": 7, "y": 5, "color": "black"},
+            {"x": 7, "y": 9, "color": "black"},
+        ]
+        result = evaluate_move(stones, 7, 7, "black", Room.RULE_RENJU)
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.forbidden)
+        self.assertEqual(result.winner, "white")
+
 
 class RoomLifecycleTests(TestCase):
     def playable_room(self, black, white):
@@ -190,6 +203,21 @@ class RoomLifecycleTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data["detail"], "房间名重复")
+
+    def test_create_room_accepts_time_controls(self):
+        owner = User.objects.create_user(username="owner", password="gomoku123")
+        client = APIClient()
+        client.force_authenticate(owner)
+
+        response = client.post(
+            "/api/rooms/",
+            {"name": "计时房", "rule_set": "standard", "move_time_seconds": 60, "total_time_seconds": 900},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["move_time_seconds"], 60)
+        self.assertEqual(response.data["total_time_seconds"], 900)
 
     def test_third_joiner_becomes_spectator_and_chat_has_role_suffix(self):
         black = User.objects.create_user(username="black", password="gomoku123")
@@ -285,6 +313,34 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(response.data["records"], [])
         self.assertFalse(GameSession.objects.exists())
         self.assertTrue(Room.objects.filter(id=room.id).exists())
+
+    def test_turn_timeout_finishes_current_game(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = Room.objects.create(
+            name="计时房",
+            black_player=black,
+            white_player=white,
+            move_time_seconds=10,
+            total_time_seconds=60,
+        )
+        set_ready(room, black, True)
+        set_ready(room, white, True)
+        room.refresh_from_db()
+        make_move(room, black, 7, 7)
+        game = room.current_game
+        GameSession.objects.filter(id=game.id).update(turn_started_at=timezone.now() - timedelta(seconds=11))
+
+        _room, result = make_move(room, white, 7, 8)
+
+        room.refresh_from_db()
+        game.refresh_from_db()
+        self.assertEqual(result.winner, "black")
+        self.assertEqual(result.reason, "对局已因走棋超时结束")
+        self.assertEqual(room.status, Room.STATUS_WAITING)
+        self.assertEqual(game.status, GameSession.STATUS_FINISHED)
+        self.assertEqual(game.winner, "black")
+        self.assertEqual(game.end_reason, "time")
 
     def test_switch_to_empty_spectator_seat_directly(self):
         black = User.objects.create_user(username="black", password="gomoku123")

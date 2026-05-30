@@ -49,13 +49,16 @@ export const api = {
   async onlineUsers() {
     return request<{ users: OnlineUser[] }>("/online/");
   },
+  async roomCount() {
+    return request<{ count: number }>("/rooms/count/");
+  },
   async matchHistory() {
     return request<{ records: MatchRecord[] }>("/profile/matches/");
   },
   async rooms() {
     return request<Room[]>("/rooms/");
   },
-  async createRoom(payload: { name: string; rule_set: RuleSet; has_password: boolean; password?: string }) {
+  async createRoom(payload: { name: string; rule_set: RuleSet; has_password: boolean; password?: string; move_time_seconds: number; total_time_seconds: number }) {
     return request<Room>("/rooms/", { method: "POST", body: JSON.stringify(payload) });
   },
   async joinRoom(id: number, password = "") {

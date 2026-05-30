@@ -51,6 +51,8 @@ class Room(models.Model):
     )
     max_players = models.PositiveSmallIntegerField(default=2)
     max_spectators = models.PositiveSmallIntegerField(default=4)
+    move_time_seconds = models.PositiveSmallIntegerField(default=30)
+    total_time_seconds = models.PositiveIntegerField(default=600)
     black_ready = models.BooleanField(default=False)
     white_ready = models.BooleanField(default=False)
     black_last_seen_at = models.DateTimeField(null=True, blank=True)
@@ -125,6 +127,11 @@ class GameSession(models.Model):
     ended_at = models.DateTimeField(null=True, blank=True)
     black_undo_used = models.PositiveSmallIntegerField(default=0)
     white_undo_used = models.PositiveSmallIntegerField(default=0)
+    move_time_seconds = models.PositiveSmallIntegerField(default=30)
+    total_time_seconds = models.PositiveIntegerField(default=600)
+    black_time_left_seconds = models.PositiveIntegerField(default=600)
+    white_time_left_seconds = models.PositiveIntegerField(default=600)
+    turn_started_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-started_at"]

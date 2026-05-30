@@ -16,6 +16,7 @@ from .services import (
     active_or_latest_game,
     add_chat,
     finish_if_player_timed_out,
+    finish_if_turn_timed_out,
     leave_room,
     mark_room_seen,
     make_move,
@@ -77,9 +78,11 @@ def mark_room_active(room_id, user=None):
     try:
         room = Room.objects.get(id=room_id)
         if user:
-            mark_room_seen(room, user)
+            mark_room_seen(room, user, throttle_seconds=10)
             room.refresh_from_db()
             finished_room, finished = finish_if_player_timed_out(room)
+            if not finished:
+                finished_room, finished = finish_if_turn_timed_out(finished_room)
             return {"finished": finished, "room_id": finished_room.id}
         touch_room(room)
     except Room.DoesNotExist:
@@ -326,6 +329,8 @@ class RoomConsumer(AsyncWebsocketConsumer):
                     await self.channel_layer.group_send(self.group_name, {"type": "undo.result", "accepted": False, "detail": f"{self.user.username} 拒绝了悔棋申请。"})
         except Exception as exc:
             await self.send_json({"type": "error", "detail": str(exc)})
+            if hasattr(self, "group_name"):
+                await self.broadcast_state()
 
     async def broadcast_state(self):
         await self.channel_layer.group_send(self.group_name, {"type": "room.state"})

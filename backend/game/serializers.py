@@ -3,6 +3,7 @@ from django.db.models import Q
 from rest_framework import serializers
 
 from .models import ChatMessage, GameSession, Move, Room
+from .services import displayed_time_left
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -69,6 +70,8 @@ class RoomSerializer(serializers.ModelSerializer):
             "max_players",
             "spectators_count",
             "max_spectators",
+            "move_time_seconds",
+            "total_time_seconds",
             "spectators",
             "black_player",
             "black_player_name",
@@ -111,6 +114,11 @@ class RoomSerializer(serializers.ModelSerializer):
             "end_reason": game.end_reason,
             "started_at": game.started_at,
             "ended_at": game.ended_at,
+            "move_time_seconds": game.move_time_seconds,
+            "total_time_seconds": game.total_time_seconds,
+            "black_time_left_seconds": displayed_time_left(game, "black"),
+            "white_time_left_seconds": displayed_time_left(game, "white"),
+            "turn_started_at": game.turn_started_at,
         }
 
     def get_black_undo_remaining(self, room):

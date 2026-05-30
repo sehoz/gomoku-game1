@@ -5,6 +5,7 @@ const defaultVolume = 55;
 export const settingsState = reactive({
   bgm: localStorage.getItem("gomoku_bgm") === "on",
   sound: localStorage.getItem("gomoku_sound") !== "off",
+  chatSound: localStorage.getItem("gomoku_chat_sound") !== "off",
   volume: Number(localStorage.getItem("gomoku_volume") || defaultVolume),
 });
 
@@ -43,6 +44,7 @@ function playTone(frequency: number, duration: number, scale = 1) {
 function persist() {
   localStorage.setItem("gomoku_bgm", settingsState.bgm ? "on" : "off");
   localStorage.setItem("gomoku_sound", settingsState.sound ? "on" : "off");
+  localStorage.setItem("gomoku_chat_sound", settingsState.chatSound ? "on" : "off");
   localStorage.setItem("gomoku_volume", String(settingsState.volume));
 }
 
@@ -58,6 +60,11 @@ export function setSound(enabled: boolean) {
   persist();
 }
 
+export function setChatSound(enabled: boolean) {
+  settingsState.chatSound = enabled;
+  persist();
+}
+
 export function setVolume(volume: number) {
   settingsState.volume = Math.max(0, Math.min(100, volume));
   persist();
@@ -67,6 +74,12 @@ export function playStoneSound() {
   if (!settingsState.sound) return;
   playTone(520, 0.07, 0.18);
   window.setTimeout(() => playTone(280, 0.09, 0.12), 35);
+}
+
+export function playChatSound() {
+  if (!settingsState.chatSound) return;
+  playTone(740, 0.055, 0.12);
+  window.setTimeout(() => playTone(920, 0.07, 0.1), 45);
 }
 
 export function startBgm() {

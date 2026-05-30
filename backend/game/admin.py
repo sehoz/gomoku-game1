@@ -5,7 +5,7 @@ from .models import ChatMessage, GameSession, Move, Room, SpectatorSeat
 
 @admin.register(Room)
 class RoomAdmin(admin.ModelAdmin):
-    list_display = ("name", "rule_set", "status", "players_count", "spectators_count", "created_at")
+    list_display = ("name", "rule_set", "status", "players_count", "spectators_count", "move_time_seconds", "total_time_seconds", "created_at")
     search_fields = ("name",)
 
 
@@ -16,7 +16,7 @@ class MoveAdmin(admin.ModelAdmin):
 
 @admin.register(GameSession)
 class GameSessionAdmin(admin.ModelAdmin):
-    list_display = ("room_name", "status", "winner", "started_at", "ended_at")
+    list_display = ("room_name", "status", "winner", "black_time_left_seconds", "white_time_left_seconds", "started_at", "ended_at")
     search_fields = ("room_name", "black_player__username", "white_player__username")
 
 

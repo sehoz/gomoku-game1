@@ -10,6 +10,7 @@ urlpatterns = [
     path("profile/matches/", views.match_history),
     path("online/", views.online_users),
     path("rooms/", views.rooms),
+    path("rooms/count/", views.room_count),
     path("rooms/<int:room_id>/join/", views.join_room_view),
     path("rooms/<int:room_id>/leave/", views.leave_room_view),
     path("rooms/<int:room_id>/state/", views.room_state),

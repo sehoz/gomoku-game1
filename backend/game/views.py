@@ -28,6 +28,7 @@ from .services import (
     add_chat,
     cleanup_idle_rooms,
     ensure_room_member,
+    finish_if_turn_timed_out,
     join_room,
     leave_room,
     make_move,
@@ -141,18 +142,32 @@ def online_users(request):
     return Response({"users": online_users_payload()})
 
 
+def active_rooms_queryset():
+    return (
+        Room.objects.filter(Q(black_player__isnull=False) | Q(white_player__isnull=False) | Q(spectators__isnull=False))
+        .exclude(status=Room.STATUS_FINISHED)
+        .distinct()
+    )
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def room_count(request):
+    cleanup_idle_rooms()
+    return Response({"count": active_rooms_queryset().count()})
+
+
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def rooms(request):
     cleanup_idle_rooms()
     if request.method == "GET":
         queryset = (
-            Room.objects.filter(Q(black_player__isnull=False) | Q(white_player__isnull=False) | Q(spectators__isnull=False))
-            .exclude(status=Room.STATUS_FINISHED)
+            active_rooms_queryset()
             .select_related("black_player", "white_player", "current_game")
             .prefetch_related("spectators__user")
         )
-        return Response(RoomSerializer(queryset.distinct(), many=True).data)
+        return Response(RoomSerializer(queryset, many=True).data)
 
     name = (request.data.get("name") or "未命名房间").strip() or "未命名房间"
     if Room.objects.exclude(status=Room.STATUS_FINISHED).filter(name__iexact=name).exists():
@@ -160,7 +175,22 @@ def rooms(request):
     rule_set = request.data.get("rule_set", Room.RULE_STANDARD)
     if rule_set not in {Room.RULE_STANDARD, Room.RULE_RENJU}:
         return Response({"detail": "规则参数无效"}, status=status.HTTP_400_BAD_REQUEST)
-    room = Room(name=name[:80], rule_set=rule_set, black_player=request.user)
+    try:
+        move_time_seconds = int(request.data.get("move_time_seconds", 30))
+        total_time_seconds = int(request.data.get("total_time_seconds", 600))
+    except (TypeError, ValueError):
+        return Response({"detail": "计时参数无效"}, status=status.HTTP_400_BAD_REQUEST)
+    if not 10 <= move_time_seconds <= 300:
+        return Response({"detail": "步时需要设置在 10 到 300 秒之间"}, status=status.HTTP_400_BAD_REQUEST)
+    if not 60 <= total_time_seconds <= 7200:
+        return Response({"detail": "局时需要设置在 1 到 120 分钟之间"}, status=status.HTTP_400_BAD_REQUEST)
+    room = Room(
+        name=name[:80],
+        rule_set=rule_set,
+        black_player=request.user,
+        move_time_seconds=move_time_seconds,
+        total_time_seconds=total_time_seconds,
+    )
     password = request.data.get("password", "")
     room.set_password(password if request.data.get("has_password") else "")
     room.refresh_status()
@@ -179,6 +209,7 @@ def join_room_view(request, room_id):
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
     except ValueError as exc:
+        broadcast_room_state(room_id)
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -206,6 +237,9 @@ def room_state(request, room_id):
         ensure_room_member(room, request.user)
     except ValueError:
         return Response({"detail": "请先加入房间"}, status=status.HTTP_403_FORBIDDEN)
+    room, timed_out = finish_if_turn_timed_out(room)
+    if timed_out:
+        broadcast_room_state(room.id)
     game = active_or_latest_game(room)
     data = {
         "room": room,
@@ -244,6 +278,7 @@ def ready_view(request, room_id):
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
     except ValueError as exc:
+        broadcast_room_state(room_id)
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -257,6 +292,7 @@ def move_view(request, room_id):
     except Room.DoesNotExist:
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
     except ValueError as exc:
+        broadcast_room_state(room_id)
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 

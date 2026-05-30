@@ -5,7 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .models import ChatMessage, GameSession, Move, Room, SpectatorSeat
-from .rules import evaluate_move, next_turn
+from .rules import RuleResult, evaluate_move, next_turn
 
 UNDO_LIMIT = 3
 
@@ -125,13 +125,24 @@ def player_last_seen_field(color):
     return "black_last_seen_at" if color == "black" else "white_last_seen_at"
 
 
-def mark_room_seen(room, user):
+def mark_room_seen(room, user, throttle_seconds=None):
     if not room.pk:
         return room
     now = timezone.now()
+    previous_activity = room.last_activity_at
     update_fields = ["last_activity_at"]
     room.last_activity_at = now
     color = user_color(room, user)
+    if throttle_seconds is not None and color:
+        field = player_last_seen_field(color)
+        previous_seen = getattr(room, field)
+        if (
+            previous_seen
+            and previous_seen > now - timedelta(seconds=throttle_seconds)
+            and previous_activity
+            and previous_activity > now - timedelta(seconds=throttle_seconds)
+        ):
+            return room
     if color:
         field = player_last_seen_field(color)
         setattr(room, field, now)
@@ -164,6 +175,11 @@ def start_game(room):
         white_player=room.white_player,
         rule_set=room.rule_set,
         started_at=now,
+        move_time_seconds=room.move_time_seconds,
+        total_time_seconds=room.total_time_seconds,
+        black_time_left_seconds=room.total_time_seconds,
+        white_time_left_seconds=room.total_time_seconds,
+        turn_started_at=now,
     )
     room.current_game = game
     room.winner = ""
@@ -233,6 +249,41 @@ def increment_undo_used(game, color):
 
 def timeout_minutes():
     return getattr(settings, "ROOM_IDLE_MINUTES", 5)
+
+
+def current_turn_color(game):
+    return "black" if game.moves.count() % 2 == 0 else "white"
+
+
+def time_left_field(color):
+    return "black_time_left_seconds" if color == "black" else "white_time_left_seconds"
+
+
+def turn_elapsed_seconds(game, now=None):
+    if not game.turn_started_at:
+        return 0
+    current = now or timezone.now()
+    return max(0, (current - game.turn_started_at).total_seconds())
+
+
+def displayed_time_left(game, color, now=None):
+    remaining = getattr(game, time_left_field(color))
+    if game.status == GameSession.STATUS_PLAYING and current_turn_color(game) == color:
+        remaining -= int(turn_elapsed_seconds(game, now))
+    return max(0, remaining)
+
+
+def finish_if_turn_timed_out(room):
+    game = active_game(room)
+    if not game:
+        return room, False
+    now = timezone.now()
+    color = current_turn_color(game)
+    elapsed = turn_elapsed_seconds(game, now)
+    remaining = getattr(game, time_left_field(color))
+    if elapsed >= game.move_time_seconds or elapsed >= remaining:
+        return finish_game(room, opponent_color(color), "time"), True
+    return room, False
 
 
 def finish_if_player_timed_out(room):
@@ -489,7 +540,10 @@ def make_move(room, user, x, y):
         raise ValueError("对局已经结束")
     room, timed_out = finish_if_player_timed_out(room)
     if timed_out:
-        raise ValueError("对局已因玩家离线超时结束")
+        return room, RuleResult(True, "对局已因玩家离线超时结束", status=f"{room.winner}_win" if room.winner else "draw", winner=room.winner)
+    room, timed_out = finish_if_turn_timed_out(room)
+    if timed_out:
+        return room, RuleResult(True, "对局已因走棋超时结束", status=f"{room.winner}_win" if room.winner else "draw", winner=room.winner)
     game = active_game(room)
     if not game:
         raise ValueError("双方准备后才能开始对局")
@@ -503,6 +557,15 @@ def make_move(room, user, x, y):
     if not result.ok:
         raise ValueError(result.reason)
 
+    now = timezone.now()
+    elapsed = turn_elapsed_seconds(game, now)
+    if elapsed >= game.move_time_seconds:
+        finish_game(room, opponent_color(color), "time")
+        return room, RuleResult(True, "本步落子超时，对局已结束", status=f"{opponent_color(color)}_win", winner=opponent_color(color))
+    if elapsed >= getattr(game, time_left_field(color)):
+        finish_game(room, opponent_color(color), "time")
+        return room, RuleResult(True, "总用时耗尽，对局已结束", status=f"{opponent_color(color)}_win", winner=opponent_color(color))
+
     Move.objects.create(
         room=room,
         game=game,
@@ -512,6 +575,10 @@ def make_move(room, user, x, y):
         y=int(y),
         color=color,
     )
+    remaining_field = time_left_field(color)
+    setattr(game, remaining_field, max(0, int(getattr(game, remaining_field) - elapsed)))
+    game.turn_started_at = now
+    game.save(update_fields=[remaining_field, "turn_started_at"])
     if result.winner:
         finish_game(room, result.winner, "forbidden" if result.forbidden else "win")
     elif result.status == "draw":
@@ -548,7 +615,8 @@ def undo_last_turn(room, requester):
     Move.objects.filter(id__in=delete_ids).delete()
     room.winner = ""
     undo_field = increment_undo_used(game, requester_color)
-    game.save(update_fields=[undo_field])
+    game.turn_started_at = timezone.now()
+    game.save(update_fields=[undo_field, "turn_started_at"])
     room.refresh_status()
     room.last_activity_at = timezone.now()
     room.save(update_fields=["status", "winner", "last_activity_at"])

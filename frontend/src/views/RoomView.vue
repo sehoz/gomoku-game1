@@ -7,7 +7,7 @@ import Avatar from "../components/Avatar.vue";
 import GameBoard from "../components/GameBoard.vue";
 import Modal from "../components/Modal.vue";
 import { authState, isAuthenticated } from "../stores/auth";
-import { playStoneSound } from "../stores/settings";
+import { playChatSound, playStoneSound } from "../stores/settings";
 import { nextTurn } from "../rules";
 import type { ChatMessage, Move, Room, RoomState, StoneColor } from "../types";
 
@@ -32,9 +32,14 @@ const seatSwitchRequest = ref<{
 } | null>(null);
 const ownUndoPending = ref(false);
 const ownSeatSwitchPending = ref(false);
+const socketConnected = ref(false);
+const nowTick = ref(Date.now());
 let socket: WebSocket | null = null;
 let heartbeatTimer: number | null = null;
 let statePollTimer: number | null = null;
+let reconnectTimer: number | null = null;
+let clockTimer: number | null = null;
+let unmounted = false;
 
 const turn = computed(() => nextTurn(moves.value));
 const myColor = computed<StoneColor | null>(() => {
@@ -61,7 +66,7 @@ const currentSeatKey = computed(() => {
 const gameStarted = computed(() => activeGame.value);
 const canReady = computed(() => Boolean(myColor.value && room.value?.players === 2 && !activeGame.value && room.value?.status !== "finished"));
 const canMove = computed(() => activeGame.value && myColor.value === turn.value);
-const canRequestUndo = computed(() => Boolean(activeGame.value && myColor.value && myUndoRemaining.value > 0 && moves.value.some((move) => move.player === authState.user?.id)));
+const canRequestUndo = computed(() => Boolean(activeGame.value && myColor.value && !ownUndoPending.value));
 const canInitiateSeatSwitch = computed(() => Boolean(currentSeatKey.value && !(myColor.value && gameStarted.value)));
 const spectatorSlots = computed(() => {
   const max = room.value?.max_spectators || 0;
@@ -84,6 +89,35 @@ const statusLabel = computed(() => {
   if (room.value.status === "waiting") return "等待中";
   return "已结束";
 });
+const turnLabel = computed(() => (turn.value === "black" ? "黑棋" : "白棋"));
+const myRoleColor = computed<StoneColor | null>(() => (myColor.value ? myColor.value : null));
+const currentGame = computed(() => room.value?.current_game || null);
+const blackTimeLeft = computed(() => timeLeftFor("black"));
+const whiteTimeLeft = computed(() => timeLeftFor("white"));
+const stepTimeLeft = computed(() => {
+  const game = currentGame.value;
+  if (!game || !activeGame.value || !game.turn_started_at) return room.value?.move_time_seconds ?? 0;
+  const elapsed = Math.floor((nowTick.value - new Date(game.turn_started_at).getTime()) / 1000);
+  const totalRemaining = turn.value === "black" ? game.black_time_left_seconds : game.white_time_left_seconds;
+  return Math.max(0, Math.min(game.move_time_seconds, totalRemaining) - elapsed);
+});
+
+function timeLeftFor(color: StoneColor) {
+  const game = currentGame.value;
+  if (!game) return room.value?.total_time_seconds ?? 0;
+  let remaining = color === "black" ? game.black_time_left_seconds : game.white_time_left_seconds;
+  if (activeGame.value && game.turn_started_at && turn.value === color) {
+    remaining -= Math.floor((nowTick.value - new Date(game.turn_started_at).getTime()) / 1000);
+  }
+  return Math.max(0, remaining);
+}
+
+function formatSeconds(seconds: number) {
+  const value = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(value / 60);
+  const rest = value % 60;
+  return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
 
 function playerNameChanged(before: Room | null, after: Room, color: StoneColor) {
   if (color === "black") return before?.black_player_name !== after.black_player_name;
@@ -97,11 +131,13 @@ function readyChanged(before: Room | null, after: Room, color: StoneColor) {
 
 function applyState(state: RoomState) {
   const previousMoveCount = moves.value.length;
+  const previousMessageCount = messages.value.length;
   const previousRoom = room.value;
   room.value = state.room;
   moves.value = state.moves;
   messages.value = state.messages;
   if (state.moves.length > previousMoveCount) playStoneSound();
+  if (previousRoom && state.messages.length > previousMessageCount) playChatSound();
   if (previousRoom && playerNameChanged(previousRoom, state.room, "black") && state.room.black_player_name) {
     notice.value = `${state.room.black_player_name} 已进入黑棋位置。`;
   } else if (previousRoom && playerNameChanged(previousRoom, state.room, "white") && state.room.white_player_name) {
@@ -144,16 +180,36 @@ async function load() {
     return;
   }
   if (!(await loadState(true))) return;
-  statePollTimer = window.setInterval(() => void loadState(false), 1000);
+  statePollTimer = window.setInterval(() => {
+    if (!socketConnected.value) void loadState(false);
+  }, 1000);
+  clockTimer = window.setInterval(() => {
+    nowTick.value = Date.now();
+  }, 250);
+  connectSocket();
+}
+
+function connectSocket() {
+  if (unmounted || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   socket = new WebSocket(roomSocketUrl(roomId));
   socket.onopen = () => {
+    socketConnected.value = true;
     sendSocket({ type: "ping" });
     heartbeatTimer = window.setInterval(() => sendSocket({ type: "ping" }), 1000);
   };
   socket.onmessage = (event) => {
     const data = JSON.parse(event.data);
     if (data.type === "state") applyState(data.state);
-    if (data.type === "error") notice.value = data.detail;
+    if (data.type === "error") {
+      ownUndoPending.value = false;
+      ownSeatSwitchPending.value = false;
+      notice.value = data.detail;
+      void loadState(false);
+    }
     if (data.type === "undo_request") {
       if (data.request.user_id === authState.user?.id) {
         ownUndoPending.value = true;
@@ -193,11 +249,15 @@ async function load() {
     }
   };
   socket.onclose = () => {
+    socketConnected.value = false;
     if (heartbeatTimer !== null) {
       window.clearInterval(heartbeatTimer);
       heartbeatTimer = null;
     }
-    notice.value = "连接已断开，可刷新房间重连。";
+    if (!unmounted) {
+      notice.value = "实时连接已断开，正在自动重连。";
+      reconnectTimer = window.setTimeout(connectSocket, 2000);
+    }
   };
 }
 
@@ -209,9 +269,20 @@ function sendSocket(payload: object) {
 
 async function play(x: number, y: number) {
   if (!canMove.value) return;
+  const color = myColor.value;
+  if (!color) return;
+  const before = moves.value;
+  moves.value = [...moves.value, { x, y, color, player: authState.user?.id }];
+  playStoneSound();
+  notice.value = "落子已发送。";
   if (sendSocket({ type: "move", x, y })) return;
-  await api.move(roomId, x, y);
-  applyState(await api.roomState(roomId));
+  try {
+    await api.move(roomId, x, y);
+    applyState(await api.roomState(roomId));
+  } catch (err) {
+    moves.value = before;
+    notice.value = err instanceof Error ? err.message : "落子失败";
+  }
 }
 
 async function sendChat() {
@@ -258,7 +329,22 @@ async function toggleReady() {
 }
 
 function requestUndo() {
+  if (!activeGame.value || !myColor.value) {
+    notice.value = "当前没有进行中的对局，不能悔棋。";
+    return;
+  }
+  if (myUndoRemaining.value <= 0) {
+    notice.value = "本局悔棋次数已用完。";
+    return;
+  }
+  if (!moves.value.some((move) => move.player === authState.user?.id)) {
+    notice.value = "你还没有可以撤销的落子。";
+    return;
+  }
+  ownUndoPending.value = true;
+  notice.value = "悔棋申请已发送，等待对方处理。";
   if (!sendSocket({ type: "undo_request" })) {
+    ownUndoPending.value = false;
     notice.value = "连接已断开，暂时不能申请悔棋。";
   }
 }
@@ -308,8 +394,11 @@ async function leave() {
 
 onMounted(load);
 onUnmounted(() => {
+  unmounted = true;
   if (heartbeatTimer !== null) window.clearInterval(heartbeatTimer);
   if (statePollTimer !== null) window.clearInterval(statePollTimer);
+  if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+  if (clockTimer !== null) window.clearInterval(clockTimer);
   socket?.close();
 });
 </script>
@@ -319,28 +408,38 @@ onUnmounted(() => {
     <header class="page-header"><div><button class="link-button" type="button" @click="leave">‹ 返回房间</button><h1>{{ room?.name || "房间" }}</h1><p>黑棋在上，白棋在下；两名玩家都准备后开始。</p></div><div class="header-actions"><button class="secondary-button" type="button" @click="leave"><LogOut :size="18" />离开房间</button></div></header>
     <section class="game-layout">
       <div class="board-panel">
-        <div class="board-toolbar">
+        <div class="game-message room-notice" :class="{ warning: notice.includes('失败') || notice.includes('断开') || notice.includes('不能') || notice.includes('用完') }">{{ notice }}</div>
+        <div class="board-statusline">
           <div><span class="status-label">规则</span><strong>{{ room?.rule_set === "renju" ? "有禁手" : "无禁手" }}</strong></div>
-          <div><span class="status-label">我的位置</span><strong>{{ myRoleLabel }}</strong></div>
-          <div><span class="status-label">当前回合</span><strong>{{ turn === "black" ? "黑棋" : "白棋" }}</strong></div>
+          <div>
+            <span class="status-label">我的位置</span>
+            <strong class="stone-status">
+              <span v-if="myRoleColor" :class="['stone-icon', `stone-icon-${myRoleColor}`]" />
+              <span>{{ myRoleLabel }}</span>
+            </strong>
+          </div>
+          <div>
+            <span class="status-label">当前回合</span>
+            <strong class="stone-status"><span :class="['stone-icon', `stone-icon-${turn}`]" />{{ turnLabel }}</strong>
+          </div>
+          <div><span class="status-label">步时</span><strong>{{ formatSeconds(stepTimeLeft) }}</strong></div>
           <div><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
         </div>
         <div class="game-actions">
           <button class="primary-button" :disabled="!canReady" type="button" @click="toggleReady"><Check :size="18" />{{ myReady ? "取消准备" : "准备" }}</button>
-          <button class="secondary-button" :disabled="!canRequestUndo || ownUndoPending" type="button" @click="requestUndo"><Undo2 :size="18" />{{ ownUndoPending ? "等待回应" : `悔棋（${myUndoRemaining}）` }}</button>
+          <button class="secondary-button" :disabled="!activeGame || !myColor || ownUndoPending" type="button" @click="requestUndo"><Undo2 :size="18" />{{ ownUndoPending ? "等待回应" : `悔棋（${myUndoRemaining}）` }}</button>
         </div>
         <GameBoard :stones="moves" :interactive="canMove" @play="play" />
-        <div class="game-message">{{ notice }}</div>
       </div>
       <aside class="settings-panel">
         <h2>玩家</h2>
         <div class="seat-list">
           <div class="seat-row">
-            <div class="seat-player"><Avatar :username="room?.black_player_name || '等待'" /><div><strong>{{ room?.black_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-black">黑棋</span></strong><span :class="['ready-badge', room?.black_ready ? 'ready' : 'waiting']">{{ room?.black_ready ? "已准备" : "未准备" }}</span></div></div>
+            <div class="seat-player"><Avatar :username="room?.black_player_name || '等待'" /><div><strong>{{ room?.black_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-black">黑棋</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.black_ready ? 'ready' : 'waiting']">{{ room?.black_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(blackTimeLeft) }}</span></span></div></div>
             <button class="secondary-button" :disabled="!canSwitchTo('black')" @click="switchPosition('black')">{{ seatButtonLabel('black', Boolean(room?.black_player)) }}</button>
           </div>
           <div class="seat-row">
-            <div class="seat-player"><Avatar :username="room?.white_player_name || '等待'" /><div><strong>{{ room?.white_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-white">白棋</span></strong><span :class="['ready-badge', room?.white_ready ? 'ready' : 'waiting']">{{ room?.white_ready ? "已准备" : "未准备" }}</span></div></div>
+            <div class="seat-player"><Avatar :username="room?.white_player_name || '等待'" /><div><strong>{{ room?.white_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-white">白棋</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.white_ready ? 'ready' : 'waiting']">{{ room?.white_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(whiteTimeLeft) }}</span></span></div></div>
             <button class="secondary-button" :disabled="!canSwitchTo('white')" @click="switchPosition('white')">{{ seatButtonLabel('white', Boolean(room?.white_player)) }}</button>
           </div>
         </div>
