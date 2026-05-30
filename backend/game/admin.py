@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import ChatMessage, GameSession, Move, PlayerProfile, Room, RoomInvitation, SpectatorSeat
+from .models import ChatMessage, GameSession, HiddenMatchRecord, Move, PlayerProfile, Room, RoomInvitation, SpectatorSeat
 
 
 @admin.register(Room)
@@ -18,6 +18,12 @@ class MoveAdmin(admin.ModelAdmin):
 class GameSessionAdmin(admin.ModelAdmin):
     list_display = ("room_name", "status", "winner", "black_time_left_seconds", "white_time_left_seconds", "started_at", "ended_at")
     search_fields = ("room_name", "black_player__username", "white_player__username")
+
+
+@admin.register(HiddenMatchRecord)
+class HiddenMatchRecordAdmin(admin.ModelAdmin):
+    list_display = ("user", "game", "hidden_at")
+    search_fields = ("user__username", "game__room_name")
 
 
 @admin.register(ChatMessage)

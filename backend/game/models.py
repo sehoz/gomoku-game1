@@ -157,6 +157,18 @@ class GameSession(models.Model):
         ordering = ["-started_at"]
 
 
+class HiddenMatchRecord(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, related_name="hidden_match_records", on_delete=models.CASCADE)
+    game = models.ForeignKey(GameSession, related_name="hidden_for_users", on_delete=models.CASCADE)
+    hidden_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ["-hidden_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["user", "game"], name="unique_hidden_match_per_user"),
+        ]
+
+
 class Move(models.Model):
     COLOR_BLACK = "black"
     COLOR_WHITE = "white"

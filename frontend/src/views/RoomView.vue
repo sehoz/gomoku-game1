@@ -9,7 +9,7 @@ import Modal from "../components/Modal.vue";
 import PlayerDetailModal from "../components/PlayerDetailModal.vue";
 import { authState, isAuthenticated } from "../stores/auth";
 import { presenceState } from "../stores/presence";
-import { playChatSound, playStoneSound } from "../stores/settings";
+import { playChatSound, playGameEndSound, playGameStartSound, playStoneSound } from "../stores/settings";
 import { nextTurn } from "../rules";
 import type { ChatMessage, Move, Room, RoomState, RuleSet, SeatSwitchRequest, StoneColor, UndoRequest } from "../types";
 
@@ -30,6 +30,7 @@ const sentInviteLabels = ref<Record<number, string>>({});
 const socketConnected = ref(false);
 const nowTick = ref(Date.now());
 const selectedPlayerId = ref<number | null>(null);
+const gameFeedback = ref<{ kind: "start" | "end"; title: string; detail: string } | null>(null);
 const roomSettingsOpen = ref(false);
 const roomSettingsError = ref("");
 const roomSettingsForm = ref({
@@ -45,6 +46,7 @@ let heartbeatTimer: number | null = null;
 let statePollTimer: number | null = null;
 let reconnectTimer: number | null = null;
 let clockTimer: number | null = null;
+let feedbackTimer: number | null = null;
 let unmounted = false;
 let stateLoadInFlight = false;
 
@@ -126,7 +128,7 @@ const stepTimeLeft = computed(() => {
 
 function timeLeftFor(color: StoneColor) {
   const game = currentGame.value;
-  if (!game) {
+  if (!game || !activeGame.value) {
     const limit = room.value?.total_time_seconds ?? 0;
     return limit > 0 ? limit : -1;
   }
@@ -144,6 +146,30 @@ function formatSeconds(seconds: number) {
   const minutes = Math.floor(value / 60);
   const rest = value % 60;
   return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
+function showGameFeedback(kind: "start" | "end", title: string, detail: string) {
+  gameFeedback.value = { kind, title, detail };
+  if (feedbackTimer !== null) window.clearTimeout(feedbackTimer);
+  feedbackTimer = window.setTimeout(() => {
+    gameFeedback.value = null;
+    feedbackTimer = null;
+  }, kind === "start" ? 2600 : 4200);
+}
+
+function winnerLabel(winner: string) {
+  if (winner === "black") return "黑棋";
+  if (winner === "white") return "白棋";
+  return "双方";
+}
+
+function endReasonLabel(reason: string) {
+  if (reason === "forbidden") return "黑棋禁手判负";
+  if (reason === "time") return "超时判负";
+  if (reason === "surrender") return "投降结束";
+  if (reason === "leave" || reason === "disconnect_timeout") return "离线结束";
+  if (reason === "draw" || reason === "timeout") return "平局";
+  return "五子连珠";
 }
 
 function openPlayerDetail(id?: number | null) {
@@ -248,6 +274,15 @@ function applyState(state: RoomState) {
   if (state.moves.length > previousMoveCount) playStoneSound();
   if (previousRoom && state.messages.length > previousMessageCount) playChatSound();
   syncPendingRequests(state.room);
+  const previousGame = previousRoom?.current_game;
+  const nextGame = state.room.current_game;
+  if (nextGame?.status === "playing" && (previousGame?.id !== nextGame.id || previousGame?.status !== "playing")) {
+    playGameStartSound();
+    showGameFeedback("start", "对局开始", "黑棋先手，双方计时已经启动。");
+  } else if (nextGame?.status === "finished" && previousGame?.id === nextGame.id && previousGame.status === "playing") {
+    playGameEndSound();
+    showGameFeedback("end", nextGame.winner ? `${winnerLabel(nextGame.winner)}获胜` : "本局结束", endReasonLabel(nextGame.end_reason));
+  }
   if (previousRoom && playerNameChanged(previousRoom, state.room, "black") && state.room.black_player_name) {
     notice.value = `${state.room.black_player_name} 已进入黑棋位置。`;
   } else if (previousRoom && playerNameChanged(previousRoom, state.room, "white") && state.room.white_player_name) {
@@ -603,6 +638,7 @@ onUnmounted(() => {
   if (statePollTimer !== null) window.clearInterval(statePollTimer);
   if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
   if (clockTimer !== null) window.clearInterval(clockTimer);
+  if (feedbackTimer !== null) window.clearTimeout(feedbackTimer);
   socket?.close();
 });
 </script>
@@ -612,6 +648,10 @@ onUnmounted(() => {
     <header class="page-header"><div><button class="link-button" type="button" @click="leave">‹ 返回大厅</button><h1>{{ room?.name || "房间" }}</h1><p>黑棋在上，白棋在下；两名玩家都准备后开始。</p></div></header>
     <section class="game-layout">
       <div class="board-panel">
+        <div v-if="gameFeedback" :class="['game-feedback', `game-feedback-${gameFeedback.kind}`]">
+          <strong>{{ gameFeedback.title }}</strong>
+          <span>{{ gameFeedback.detail }}</span>
+        </div>
         <div class="board-controlbar">
           <div class="control-item">
             <span class="status-label">我的位置</span>

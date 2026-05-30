@@ -82,6 +82,20 @@ export function playChatSound() {
   window.setTimeout(() => playTone(940, 0.12, 0.28), 60);
 }
 
+export function playGameStartSound() {
+  if (!settingsState.sound) return;
+  playTone(392, 0.12, 0.22);
+  window.setTimeout(() => playTone(523.25, 0.14, 0.24), 90);
+  window.setTimeout(() => playTone(659.25, 0.18, 0.22), 190);
+}
+
+export function playGameEndSound() {
+  if (!settingsState.sound) return;
+  playTone(784, 0.14, 0.25);
+  window.setTimeout(() => playTone(587.33, 0.18, 0.24), 130);
+  window.setTimeout(() => playTone(392, 0.24, 0.2), 280);
+}
+
 export function startBgm() {
   if (!settingsState.bgm || bgmTimer !== null) return;
   const notes = [196, 246.94, 293.66, 246.94, 220, 196, 164.81, 196];

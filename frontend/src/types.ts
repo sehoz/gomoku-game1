@@ -18,7 +18,7 @@ export interface UserProfile {
   };
 }
 
-export type PublicUserProfile = Pick<UserProfile, "id" | "username" | "avatar_url" | "stats">;
+export type PublicUserProfile = Pick<UserProfile, "id" | "username" | "avatar_url" | "stats"> & { recent_matches: MatchRecord[] };
 
 export interface Room {
   id: number;

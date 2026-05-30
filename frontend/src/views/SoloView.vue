@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { RotateCcw, Undo2 } from "lucide-vue-next";
-import { api } from "../api";
 import GameBoard from "../components/GameBoard.vue";
 import { evaluateMove, nextTurn, opponent } from "../rules";
 import { playStoneSound } from "../stores/settings";
@@ -25,6 +24,10 @@ const localDirections = [
   [1, 1],
   [1, -1],
 ] as const;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 const statusLabel = computed(() => {
   if (thinking.value) return "AI 思考中";
   return {
@@ -109,32 +112,15 @@ async function aiPlay() {
   const requestId = aiRequestId.value + 1;
   aiRequestId.value = requestId;
   try {
-    const data = await api.soloAiMove({
-      stones: stones.value,
-      board_size: 15,
-      ai_color: aiColor.value,
-      rule_set: ruleSet.value,
-      ai_level: aiLevel.value,
-    });
+    await sleep(180);
     if (requestId !== aiRequestId.value) return;
-    if (!data.move) {
+    const move = localAiMove();
+    if (!move) {
       status.value = "draw";
       message.value = "平局。";
       return;
     }
-    applyAiMove({ x: data.move.x, y: data.move.y, color: aiColor.value }, data.result);
-  } catch (err) {
-    if (requestId !== aiRequestId.value) return;
-    const fallback = localAiMove();
-    if (!fallback) {
-      status.value = "draw";
-      message.value = "平局。";
-      return;
-    }
-    applyAiMove({ x: fallback.x, y: fallback.y, color: aiColor.value }, fallback.result);
-    if (!fallback.result.reason && !fallback.result.winner) {
-      message.value = "AI 已使用本地策略落子。";
-    }
+    applyAiMove({ x: move.x, y: move.y, color: aiColor.value }, move.result);
   } finally {
     if (requestId === aiRequestId.value) thinking.value = false;
   }

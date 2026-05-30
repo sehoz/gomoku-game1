@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { BadgeCheck, ChevronLeft, ChevronRight, Clock3, LogIn, LogOut, RotateCcw, Save, Trophy, Upload } from "lucide-vue-next";
+import { BadgeCheck, ChevronLeft, ChevronRight, Clock3, LogIn, LogOut, RotateCcw, Save, Trash2, Trophy, Upload } from "lucide-vue-next";
 import { api } from "../api";
 import AuthModal from "../components/AuthModal.vue";
 import Avatar from "../components/Avatar.vue";
@@ -116,6 +116,18 @@ async function openReplay(record: MatchRecord) {
   }
 }
 
+async function hideRecord(record: MatchRecord) {
+  if (!window.confirm("确定要从个人中心隐藏这条对局记录吗？棋谱数据不会从服务器删除。")) return;
+  historyError.value = "";
+  try {
+    await api.hideMatchRecord(record.id);
+    const nextPage = records.value.length === 1 && historyPage.value > 1 ? historyPage.value - 1 : historyPage.value;
+    await loadHistory(nextPage);
+  } catch (err) {
+    historyError.value = err instanceof Error ? err.message : "隐藏对局记录失败";
+  }
+}
+
 function setReplayStep(step: number) {
   if (!replay.value) return;
   replayStep.value = Math.max(0, Math.min(replay.value.moves.length, step));
@@ -181,7 +193,7 @@ watch(
           <article v-for="record in records" :key="record.id" class="history-row">
             <div><strong>{{ record.room_name }}</strong><span>{{ colorLabel(record.color) }} · 对手：{{ record.opponent.username }}</span></div>
             <div><span>开始：{{ formatTime(record.started_at) }}</span><span>结束：{{ formatTime(record.ended_at) }}</span></div>
-            <div class="inline-actions"><span :class="['result-badge', record.result]">{{ resultLabel(record) }}</span><button class="secondary-button" type="button" @click="openReplay(record)">查看棋谱</button></div>
+            <div class="inline-actions"><span :class="['result-badge', record.result]">{{ resultLabel(record) }}</span><button class="secondary-button" type="button" @click="openReplay(record)">查看棋谱</button><button class="secondary-button danger-button" type="button" @click="hideRecord(record)"><Trash2 :size="16" />隐藏记录</button></div>
           </article>
           <div class="pagination-row">
             <button class="secondary-button" type="button" :disabled="historyPage <= 1" @click="changeHistoryPage(historyPage - 1)"><ChevronLeft :size="16" />上一页</button>
@@ -208,7 +220,11 @@ watch(
           <button class="secondary-button" type="button" @click="setReplayStep(replayStep - 1)"><ChevronLeft :size="16" />上一步</button>
           <button class="secondary-button" type="button" @click="setReplayStep(replayStep + 1)">下一步<ChevronRight :size="16" /></button>
           <button class="secondary-button" type="button" @click="setReplayStep(replay.moves.length)">末尾</button>
-          <input :value="replayStep" type="range" min="0" :max="replay.moves.length" @input="onReplaySlider" />
+          <div class="replay-slider-row">
+            <span>0</span>
+            <input class="replay-slider" :value="replayStep" type="range" min="0" :max="replay.moves.length" @input="onReplaySlider" />
+            <span>{{ replay.moves.length }}</span>
+          </div>
         </div>
       </div>
     </Modal>

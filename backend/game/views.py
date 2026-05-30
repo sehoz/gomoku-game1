@@ -13,7 +13,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from .ai import choose_ai_move
-from .models import ChatMessage, GameSession, PlayerProfile, Room, RoomInvitation
+from .models import ChatMessage, GameSession, HiddenMatchRecord, PlayerProfile, Room, RoomInvitation
 from .presence import online_users_payload
 from .presence import touch_user
 from .rules import evaluate_move
@@ -196,9 +196,11 @@ def match_history(request):
     except (TypeError, ValueError):
         page = 1
     page_size = 10
+    hidden_ids = HiddenMatchRecord.objects.filter(user=request.user).values("game_id")
     queryset = (
         GameSession.objects.filter(status=GameSession.STATUS_FINISHED, moves__isnull=False)
         .filter(Q(black_player=request.user) | Q(white_player=request.user))
+        .exclude(id__in=hidden_ids)
         .select_related("room", "black_player", "white_player")
         .prefetch_related("moves")
         .distinct()
@@ -246,6 +248,49 @@ def match_history(request):
     )
 
 
+def recent_match_records(user, limit=5):
+    hidden_ids = HiddenMatchRecord.objects.filter(user=user).values("game_id")
+    games = (
+        GameSession.objects.filter(status=GameSession.STATUS_FINISHED, moves__isnull=False)
+        .filter(Q(black_player=user) | Q(white_player=user))
+        .exclude(id__in=hidden_ids)
+        .select_related("room", "black_player", "white_player")
+        .prefetch_related("moves")
+        .distinct()
+        .order_by("-ended_at", "-started_at")[:limit]
+    )
+    records = []
+    for game in games:
+        color = "black" if game.black_player_id == user.id else "white"
+        opponent = game.white_player if color == "black" else game.black_player
+        if game.winner == color:
+            result = "win"
+        elif game.winner in {"black", "white"}:
+            result = "loss"
+        elif game.end_reason == "draw":
+            result = "draw"
+        else:
+            result = "unfinished"
+        records.append(
+            {
+                "id": game.id,
+                "room_name": game.room.name if game.room else game.room_name,
+                "rule_set": game.rule_set,
+                "color": color,
+                "result": result,
+                "opponent": {
+                    "id": opponent.id if opponent else None,
+                    "username": opponent.username if opponent else "未知玩家",
+                },
+                "started_at": game.started_at,
+                "ended_at": game.ended_at,
+                "end_reason": game.end_reason,
+                "moves_count": game.moves.count(),
+            }
+        )
+    return MatchRecordSerializer(records, many=True).data
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def player_detail(request, user_id):
@@ -253,10 +298,12 @@ def player_detail(request, user_id):
         user = User.objects.get(id=user_id, is_active=True)
     except User.DoesNotExist:
         return Response({"detail": "用户不存在"}, status=status.HTTP_404_NOT_FOUND)
-    return Response({"user": PublicUserSerializer(user).data})
+    data = PublicUserSerializer(user).data
+    data["recent_matches"] = recent_match_records(user)
+    return Response({"user": data})
 
 
-@api_view(["GET"])
+@api_view(["GET", "DELETE"])
 @permission_classes([IsAuthenticated])
 def match_detail(request, match_id):
     try:
@@ -269,6 +316,11 @@ def match_detail(request, match_id):
         return Response({"detail": "对局不存在"}, status=status.HTTP_404_NOT_FOUND)
     if request.user.id not in {game.black_player_id, game.white_player_id}:
         return Response({"detail": "无权查看该棋谱"}, status=status.HTTP_403_FORBIDDEN)
+    if request.method == "DELETE":
+        HiddenMatchRecord.objects.get_or_create(user=request.user, game=game)
+        return Response({"ok": True})
+    if HiddenMatchRecord.objects.filter(user=request.user, game=game).exists():
+        return Response({"detail": "对局不存在"}, status=status.HTTP_404_NOT_FOUND)
     data = {
         "id": game.id,
         "room_name": game.room.name if game.room else game.room_name,

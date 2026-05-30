@@ -281,6 +281,7 @@ def finish_game(room, winner="", reason="finished"):
     game.end_reason = reason
     game.ended_at = now
     game.save(update_fields=["winner", "status", "end_reason", "ended_at"])
+    swap_players_after_finished_game(room)
     room.winner = winner or ""
     room.status = Room.STATUS_WAITING
     room.black_ready = False
@@ -292,6 +293,12 @@ def finish_game(room, winner="", reason="finished"):
         update_fields=[
             "winner",
             "status",
+            "black_player",
+            "white_player",
+            "black_joined_at",
+            "white_joined_at",
+            "black_last_seen_at",
+            "white_last_seen_at",
             "black_ready",
             "white_ready",
             "pending_undo_request",
@@ -300,6 +307,26 @@ def finish_game(room, winner="", reason="finished"):
         ]
     )
     return room
+
+
+def swap_players_after_finished_game(room):
+    if not room.black_player_id or not room.white_player_id:
+        return
+    (
+        room.black_player,
+        room.white_player,
+        room.black_joined_at,
+        room.white_joined_at,
+        room.black_last_seen_at,
+        room.white_last_seen_at,
+    ) = (
+        room.white_player,
+        room.black_player,
+        room.white_joined_at,
+        room.black_joined_at,
+        room.white_last_seen_at,
+        room.black_last_seen_at,
+    )
 
 
 def undo_used(game, color):

@@ -107,6 +107,9 @@ export const api = {
   async matchReplay(id: number) {
     return request<MatchReplay>(`/profile/matches/${id}/`);
   },
+  async hideMatchRecord(id: number) {
+    return request<{ ok: boolean }>(`/profile/matches/${id}/`, { method: "DELETE" });
+  },
   async invitations() {
     return request<{ invitations: RoomInvitation[] }>("/invitations/");
   },

@@ -6,7 +6,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from .ai import choose_ai_move
-from .models import GameSession, Move, PlayerProfile, Room, SpectatorSeat
+from .models import GameSession, HiddenMatchRecord, Move, PlayerProfile, Room, SpectatorSeat
 from .rules import evaluate_move
 from .services import (
     SeatSwitchNeedsConsent,
@@ -585,6 +585,25 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(game.winner, "black")
         self.assertIsNotNone(game.ended_at)
 
+    def test_finished_game_swaps_black_and_white_seats_for_next_game(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = self.playable_room(black, white)
+
+        for x in range(4):
+            make_move(room, black, x, 0)
+            make_move(room, white, x, 1)
+        make_move(room, black, 4, 0)
+
+        room.refresh_from_db()
+        game = room.current_game
+        self.assertEqual(game.black_player, black)
+        self.assertEqual(game.white_player, white)
+        self.assertEqual(room.black_player, white)
+        self.assertEqual(room.white_player, black)
+        self.assertFalse(room.black_ready)
+        self.assertFalse(room.white_ready)
+
     def test_profile_match_history_uses_game_sessions(self):
         black = User.objects.create_user(username="black", password="gomoku123")
         white = User.objects.create_user(username="white", password="gomoku123")
@@ -627,6 +646,33 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(first.data["total"], 12)
         self.assertEqual(first.data["total_pages"], 2)
         self.assertEqual(len(second.data["records"]), 2)
+
+    def test_player_can_hide_own_match_record_without_deleting_game(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        game = GameSession.objects.create(
+            room_name="hidden-room",
+            black_player=black,
+            white_player=white,
+            status=GameSession.STATUS_FINISHED,
+            winner="black",
+            ended_at=timezone.now(),
+        )
+        Move.objects.create(game=game, player=black, move_number=1, x=7, y=7, color="black")
+        client = APIClient()
+        client.force_authenticate(black)
+
+        delete_response = client.delete(f"/api/profile/matches/{game.id}/")
+        history_response = client.get("/api/profile/matches/")
+        replay_response = client.get(f"/api/profile/matches/{game.id}/")
+        public_response = APIClient().get(f"/api/users/{black.id}/")
+
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertTrue(HiddenMatchRecord.objects.filter(user=black, game=game).exists())
+        self.assertTrue(GameSession.objects.filter(id=game.id).exists())
+        self.assertEqual(history_response.data["records"], [])
+        self.assertEqual(replay_response.status_code, 404)
+        self.assertEqual(public_response.data["user"]["recent_matches"], [])
 
     def test_zero_move_ready_session_is_not_logged(self):
         black = User.objects.create_user(username="black", password="gomoku123")
