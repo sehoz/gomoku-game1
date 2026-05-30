@@ -6,9 +6,11 @@ import { evaluateMove, nextTurn, opponent } from "../rules";
 import { playStoneSound } from "../stores/settings";
 import type { AiLevel, GameStatus, Move, RuleSet, StoneColor } from "../types";
 
+type SoloMode = "self" | AiLevel;
+
 const stones = ref<Move[]>([]);
 const ruleSet = ref<RuleSet>("standard");
-const aiLevel = ref<AiLevel>("normal");
+const aiLevel = ref<SoloMode>("normal");
 const playerColor = ref<StoneColor>("black");
 const status = ref<GameStatus>("playing");
 const message = ref("黑棋先手，请在交点处落子。");
@@ -16,8 +18,10 @@ const thinking = ref(false);
 const lastPlayerMoveIndex = ref<number | null>(null);
 const aiRequestId = ref(0);
 const turn = computed(() => nextTurn(stones.value));
+const selfPlay = computed(() => aiLevel.value === "self");
 const aiColor = computed(() => opponent(playerColor.value));
-const playerTurn = computed(() => status.value === "playing" && turn.value === playerColor.value);
+const playerTurn = computed(() => status.value === "playing" && !thinking.value && (selfPlay.value || turn.value === playerColor.value));
+const positionLabel = computed(() => (selfPlay.value ? "自控双方" : playerColor.value === "black" ? "黑棋" : "白棋"));
 const localDirections = [
   [1, 0],
   [0, 1],
@@ -30,6 +34,7 @@ function sleep(ms: number) {
 }
 const statusLabel = computed(() => {
   if (thinking.value) return "AI 思考中";
+  if (selfPlay.value && status.value === "playing") return "自控对局";
   return {
     playing: "进行中",
     black_win: "黑棋获胜",
@@ -37,6 +42,15 @@ const statusLabel = computed(() => {
     draw: "平局",
   }[status.value];
 });
+
+function colorLabel(color: StoneColor) {
+  return color === "black" ? "黑棋" : "白棋";
+}
+
+function turnMessage() {
+  if (selfPlay.value) return `自控模式，轮到${colorLabel(turn.value)}落子。`;
+  return turn.value === playerColor.value ? "轮到你落子。" : "AI 思考中。";
+}
 
 function localLineScore(x: number, y: number, color: StoneColor) {
   const board = new Map(stones.value.map((stone) => [`${stone.x},${stone.y}`, stone.color]));
@@ -107,7 +121,7 @@ function applyAiMove(move: Move, result: { status: string; winner?: StoneColor; 
 }
 
 async function aiPlay() {
-  if (status.value !== "playing" || turn.value !== aiColor.value || thinking.value) return;
+  if (selfPlay.value || status.value !== "playing" || turn.value !== aiColor.value || thinking.value) return;
   thinking.value = true;
   const requestId = aiRequestId.value + 1;
   aiRequestId.value = requestId;
@@ -128,19 +142,32 @@ async function aiPlay() {
 
 watch([turn, aiColor, status], aiPlay, { immediate: true });
 
+watch(aiLevel, () => {
+  aiRequestId.value += 1;
+  thinking.value = false;
+  if (selfPlay.value) lastPlayerMoveIndex.value = null;
+  if (status.value === "playing") message.value = turnMessage();
+  void aiPlay();
+});
+
 function play(x: number, y: number) {
   if (!playerTurn.value) return;
-  const result = evaluateMove(stones.value, x, y, playerColor.value, ruleSet.value);
+  const moveColor = selfPlay.value ? turn.value : playerColor.value;
+  const result = evaluateMove(stones.value, x, y, moveColor, ruleSet.value);
   if (!result.ok) {
     message.value = result.reason || "不能落子";
     return;
   }
-  lastPlayerMoveIndex.value = stones.value.length;
-  stones.value.push({ x, y, color: playerColor.value });
+  if (!selfPlay.value) lastPlayerMoveIndex.value = stones.value.length;
+  stones.value.push({ x, y, color: moveColor });
   playStoneSound();
   status.value = result.status;
   if (result.reason) {
     message.value = result.reason;
+  } else if (selfPlay.value && result.winner) {
+    message.value = `${colorLabel(result.winner)}获胜。`;
+  } else if (selfPlay.value) {
+    message.value = `轮到${colorLabel(nextTurn(stones.value))}落子。`;
   } else if (result.winner) {
     message.value = result.winner === playerColor.value ? "你赢了。" : "你输了。";
   } else {
@@ -154,10 +181,20 @@ function reset() {
   status.value = "playing";
   thinking.value = false;
   lastPlayerMoveIndex.value = null;
-  message.value = "黑棋先手，请在交点处落子。";
+  message.value = selfPlay.value ? "自控模式，轮到黑棋落子。" : "黑棋先手，请在交点处落子。";
 }
 
 function undo() {
+  if (selfPlay.value) {
+    if (stones.value.length === 0) {
+      message.value = "当前没有可以悔棋的落子。";
+      return;
+    }
+    stones.value.pop();
+    status.value = "playing";
+    message.value = `已撤销最后一步，轮到${colorLabel(turn.value)}落子。`;
+    return;
+  }
   if (lastPlayerMoveIndex.value === null) {
     message.value = "当前没有可以悔棋的落子。";
     return;
@@ -179,7 +216,7 @@ function undo() {
     <section class="game-layout">
       <div class="board-panel">
         <div class="board-controlbar solo-controlbar">
-          <div class="control-item"><span class="status-label">我的位置</span><strong class="stone-status"><span :class="['stone-icon', `stone-icon-${playerColor}`]" />{{ playerColor === "black" ? "黑棋" : "白棋" }}</strong></div>
+          <div class="control-item"><span class="status-label">我的位置</span><strong class="stone-status"><span v-if="!selfPlay" :class="['stone-icon', `stone-icon-${playerColor}`]" />{{ positionLabel }}</strong></div>
           <div class="control-item"><span class="status-label">当前回合</span><strong class="stone-status"><span :class="['stone-icon', `stone-icon-${turn}`]" />{{ turn === "black" ? "黑棋" : "白棋" }}</strong></div>
           <div class="control-item"><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
           <div class="control-actions solo-control-actions">
@@ -193,8 +230,8 @@ function undo() {
       <aside class="settings-panel">
         <h2>对局参数</h2>
         <label>游戏规则<select v-model="ruleSet"><option value="standard">无禁手</option><option value="renju">有禁手</option></select></label>
-        <label>AI 强度<select v-model="aiLevel"><option value="easy">入门</option><option value="normal">标准</option><option value="hard">进阶</option></select></label>
-        <label>玩家棋色<select v-model="playerColor"><option value="black">执黑</option><option value="white">执白</option></select></label>
+        <label>AI 强度<select v-model="aiLevel"><option value="self">自己</option><option value="easy">入门</option><option value="normal">标准</option><option value="hard">进阶</option></select></label>
+        <label>玩家棋色<select v-model="playerColor" :disabled="selfPlay"><option value="black">执黑</option><option value="white">执白</option></select></label>
       </aside>
     </section>
   </main>
