@@ -18,6 +18,10 @@ import type {
 const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 const wsBase = import.meta.env.VITE_WS_BASE_URL || "ws://localhost:8000/ws";
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 export function token() {
   return localStorage.getItem("gomoku_token") || "";
 }
@@ -28,18 +32,33 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (token()) {
     headers.set("Authorization", `Token ${token()}`);
   }
-  let response: Response;
-  try {
-    response = await fetch(`${apiBase}${path}`, { ...options, headers });
-  } catch {
-    throw new Error("无法连接服务器，请稍后重试");
+  const method = (options.method || "GET").toUpperCase();
+  const maxAttempts = method === "GET" ? 3 : 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let response: Response;
+    try {
+      response = await fetch(`${apiBase}${path}`, { ...options, headers });
+    } catch {
+      if (attempt < maxAttempts) {
+        await sleep(220 * attempt);
+        continue;
+      }
+      throw new Error("网络连接不稳定，请稍后重试");
+    }
+    const contentType = response.headers.get("content-type") || "";
+    const data = contentType.includes("application/json") ? await response.json().catch(() => ({})) : {};
+    if (response.ok) return data;
+    if (method === "GET" && response.status >= 500 && attempt < maxAttempts) {
+      await sleep(260 * attempt);
+      continue;
+    }
+    const detail = data.detail || Object.values(data).flat().filter(Boolean).join("；");
+    if (detail) throw new Error(String(detail));
+    if (response.status === 429) throw new Error("请求过于频繁，请稍后再试");
+    if (response.status >= 500) throw new Error(`服务器暂时不可用（${response.status}），请稍后重试`);
+    throw new Error(`请求失败（${response.status}）`);
   }
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const detail = data.detail || Object.values(data).flat().join("；");
-    throw new Error(detail || "请求失败");
-  }
-  return data;
+  throw new Error("网络连接不稳定，请稍后重试");
 }
 
 export const api = {

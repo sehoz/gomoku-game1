@@ -32,6 +32,7 @@ let statePollTimer: number | null = null;
 let reconnectTimer: number | null = null;
 let clockTimer: number | null = null;
 let unmounted = false;
+let stateLoadInFlight = false;
 
 const turn = computed(() => nextTurn(moves.value));
 const myColor = computed<StoneColor | null>(() => {
@@ -208,17 +209,57 @@ function applyState(state: RoomState) {
   }
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function errorMessage(err: unknown, fallback: string) {
+  return err instanceof Error ? err.message : fallback;
+}
+
+function isTransientError(err: unknown) {
+  const message = errorMessage(err, "");
+  return (
+    message.includes("网络连接不稳定")
+    || message.includes("无法连接服务器")
+    || message.includes("服务器暂时不可用")
+    || message.includes("请求失败（5")
+    || message.includes("请求过于频繁")
+  );
+}
+
+async function waitForSocketOpen(timeoutMs = 900) {
+  if (socket?.readyState === WebSocket.OPEN) return true;
+  connectSocket();
+  const startedAt = Date.now();
+  while (!unmounted && Date.now() - startedAt < timeoutMs) {
+    if (socket?.readyState === WebSocket.OPEN) return true;
+    await wait(50);
+  }
+  return socket?.readyState === WebSocket.OPEN;
+}
+
+async function sendRealtime(payload: object) {
+  if (sendSocket(payload)) return true;
+  if (await waitForSocketOpen()) return sendSocket(payload);
+  return false;
+}
+
 async function loadState(redirectOnError = false) {
+  if (stateLoadInFlight) return false;
+  stateLoadInFlight = true;
   try {
     applyState(await api.roomState(roomId));
     return true;
   } catch (err) {
-    const message = err instanceof Error ? err.message : "房间加载失败";
-    if (redirectOnError || !message.includes("无法连接服务器")) {
+    const message = errorMessage(err, "房间加载失败");
+    if (redirectOnError || !isTransientError(err)) {
       notice.value = message;
     }
-    if (redirectOnError) router.push("/rooms");
+    if (redirectOnError && !isTransientError(err)) router.push("/rooms");
     return false;
+  } finally {
+    stateLoadInFlight = false;
   }
 }
 
@@ -227,7 +268,7 @@ async function load() {
     router.push("/rooms");
     return;
   }
-  if (!(await loadState(true))) return;
+  await loadState(true);
   statePollTimer = window.setInterval(() => {
     if (!socketConnected.value) void loadState(false);
   }, 1000);
@@ -306,12 +347,20 @@ function connectSocket() {
       reconnectTimer = window.setTimeout(connectSocket, 2000);
     }
   };
+  socket.onerror = () => {
+    socketConnected.value = false;
+    socket?.close();
+  };
 }
 
 function sendSocket(payload: object) {
   if (socket?.readyState !== WebSocket.OPEN) return false;
-  socket.send(JSON.stringify(payload));
-  return true;
+  try {
+    socket.send(JSON.stringify(payload));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function play(x: number, y: number) {
@@ -322,34 +371,46 @@ async function play(x: number, y: number) {
   moves.value = [...moves.value, { x, y, color, player: authState.user?.id }];
   playStoneSound();
   notice.value = "落子已发送。";
-  if (sendSocket({ type: "move", x, y })) return;
+  if (await sendRealtime({ type: "move", x, y })) return;
   try {
     await api.move(roomId, x, y);
     applyState(await api.roomState(roomId));
   } catch (err) {
+    if (isTransientError(err)) {
+      notice.value = "网络波动，正在重新同步落子。";
+      window.setTimeout(() => void loadState(false), 1200);
+      return;
+    }
     moves.value = before;
-    notice.value = err instanceof Error ? err.message : "落子失败";
+    notice.value = errorMessage(err, "落子失败");
   }
 }
 
 async function sendChat() {
   const text = draft.value.trim();
   if (!text) return;
-  if (!sendSocket({ type: "chat", text })) {
+  draft.value = "";
+  if (await sendRealtime({ type: "chat", text })) return;
+  try {
     await api.chat(roomId, text);
     applyState(await api.roomState(roomId));
+  } catch (err) {
+    if (isTransientError(err)) {
+      notice.value = "网络波动，聊天消息未确认，请稍后再试。";
+      return;
+    }
+    notice.value = errorMessage(err, "发送聊天失败");
   }
-  draft.value = "";
 }
 
 async function switchPosition(targetSeat: string) {
   if (!canInitiateSeatSwitch.value || targetSeat === currentSeatKey.value) return;
-  if (sendSocket({ type: "switch_position", target_seat: targetSeat })) return;
+  if (await sendRealtime({ type: "switch_position", target_seat: targetSeat })) return;
   try {
     await api.switchPosition(roomId, targetSeat);
     applyState(await api.roomState(roomId));
   } catch (err) {
-    notice.value = err instanceof Error ? err.message : "换位失败";
+    notice.value = isTransientError(err) ? "网络波动，换位操作未确认。" : errorMessage(err, "换位失败");
     void loadState(false);
   }
 }
@@ -367,16 +428,16 @@ function canSwitchTo(seatKey: string) {
 async function toggleReady() {
   if (!myColor.value) return;
   const nextReady = !myReady.value;
-  if (sendSocket({ type: "ready", ready: nextReady })) return;
+  if (await sendRealtime({ type: "ready", ready: nextReady })) return;
   try {
     await api.readyRoom(roomId, nextReady);
     applyState(await api.roomState(roomId));
   } catch (err) {
-    notice.value = err instanceof Error ? err.message : "准备状态更新失败";
+    notice.value = isTransientError(err) ? "网络波动，准备状态未确认。" : errorMessage(err, "准备状态更新失败");
   }
 }
 
-function requestUndo() {
+async function requestUndo() {
   if (!activeGame.value || !myColor.value) {
     notice.value = "当前没有进行中的对局，不能悔棋。";
     return;
@@ -391,17 +452,17 @@ function requestUndo() {
   }
   ownUndoPending.value = true;
   notice.value = "悔棋申请已发送，等待对方处理。";
-  if (sendSocket({ type: "undo_request" })) return;
+  if (await sendRealtime({ type: "undo_request" })) return;
   api.requestUndo(roomId)
     .then(() => loadState(false))
     .catch((err) => {
       ownUndoPending.value = false;
-      notice.value = err instanceof Error ? err.message : "悔棋申请失败";
+      notice.value = isTransientError(err) ? "网络波动，悔棋申请未确认。" : errorMessage(err, "悔棋申请失败");
     });
 }
 
 async function respondUndo(accepted: boolean) {
-  if (sendSocket({ type: accepted ? "undo_accept" : "undo_reject" })) {
+  if (await sendRealtime({ type: accepted ? "undo_accept" : "undo_reject" })) {
     if (!accepted) undoRequest.value = null;
     return;
   }
@@ -412,7 +473,7 @@ async function respondUndo(accepted: boolean) {
     await loadState(false);
   } catch (err) {
     ownUndoPending.value = false;
-    notice.value = err instanceof Error ? err.message : "处理悔棋申请失败";
+    notice.value = isTransientError(err) ? "网络波动，悔棋回应未确认。" : errorMessage(err, "处理悔棋申请失败");
   }
 }
 
@@ -425,7 +486,7 @@ function rejectUndo() {
 }
 
 async function respondSeatSwitch(accepted: boolean) {
-  if (sendSocket({ type: accepted ? "seat_switch_accept" : "seat_switch_reject" })) {
+  if (await sendRealtime({ type: accepted ? "seat_switch_accept" : "seat_switch_reject" })) {
     if (!accepted) seatSwitchRequest.value = null;
     return;
   }
@@ -435,7 +496,7 @@ async function respondSeatSwitch(accepted: boolean) {
     seatSwitchRequest.value = null;
     await loadState(false);
   } catch (err) {
-    notice.value = err instanceof Error ? err.message : "处理换位申请失败";
+    notice.value = isTransientError(err) ? "网络波动，换位回应未确认。" : errorMessage(err, "处理换位申请失败");
   }
 }
 
@@ -454,7 +515,7 @@ async function surrenderGame() {
     notice.value = "你已投降，本局结束。";
     await loadState(false);
   } catch (err) {
-    notice.value = err instanceof Error ? err.message : "投降失败";
+    notice.value = isTransientError(err) ? "网络波动，投降操作未确认。" : errorMessage(err, "投降失败");
   }
 }
 
@@ -465,7 +526,7 @@ async function kickUser(userId: number) {
     notice.value = "已移出该玩家。";
     await loadState(false);
   } catch (err) {
-    notice.value = err instanceof Error ? err.message : "踢出失败";
+    notice.value = isTransientError(err) ? "网络波动，踢出操作未确认。" : errorMessage(err, "踢出失败");
   }
 }
 
@@ -475,12 +536,12 @@ async function inviteUser(userId: number) {
     await api.inviteRoomUser(roomId, userId);
     notice.value = "邀请已发送。";
   } catch (err) {
-    notice.value = err instanceof Error ? err.message : "邀请失败";
+    notice.value = isTransientError(err) ? "网络波动，邀请未确认。" : errorMessage(err, "邀请失败");
   }
 }
 
 async function leave() {
-  if (sendSocket({ type: "leave" })) {
+  if (await sendRealtime({ type: "leave" })) {
     window.setTimeout(() => {
       socket?.close();
       router.push("/rooms");

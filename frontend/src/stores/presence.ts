@@ -12,6 +12,7 @@ let socket: WebSocket | null = null;
 let reconnectTimer: number | null = null;
 let pollTimer: number | null = null;
 let activeToken = "";
+const fallbackPollMs = 5000;
 
 function clearReconnect() {
   if (reconnectTimer === null) return;
@@ -39,10 +40,11 @@ export function connectPresence() {
   if (socket && activeToken === token && socket.readyState !== WebSocket.CLOSED) return;
   disconnectPresence();
   activeToken = token;
-  pollTimer = window.setInterval(refreshPresence, 1000);
+  void refreshPresence();
   socket = new WebSocket(presenceSocketUrl());
   socket.onopen = () => {
     presenceState.connected = true;
+    clearPoll();
   };
   socket.onmessage = (event) => {
     const data = JSON.parse(event.data);
@@ -50,11 +52,13 @@ export function connectPresence() {
   };
   socket.onclose = () => {
     presenceState.connected = false;
+    if (pollTimer === null) pollTimer = window.setInterval(refreshPresence, fallbackPollMs);
     clearReconnect();
     reconnectTimer = window.setTimeout(connectPresence, authState.user ? 3000 : 6000);
   };
   socket.onerror = () => {
     presenceState.connected = false;
+    if (pollTimer === null) pollTimer = window.setInterval(refreshPresence, fallbackPollMs);
     void refreshPresence();
   };
 }

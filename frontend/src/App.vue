@@ -11,6 +11,7 @@ import type { RoomInvitation } from "./types";
 const router = useRouter();
 const invitations = ref<RoomInvitation[]>([]);
 let invitationTimer: number | null = null;
+const invitationPollMs = 3000;
 
 async function refreshInvitations() {
   if (!authState.user) {
@@ -28,7 +29,7 @@ async function refreshInvitations() {
 function startInvitationPolling() {
   if (invitationTimer !== null) return;
   void refreshInvitations();
-  invitationTimer = window.setInterval(refreshInvitations, 1000);
+  invitationTimer = window.setInterval(refreshInvitations, invitationPollMs);
 }
 
 function stopInvitationPolling() {
