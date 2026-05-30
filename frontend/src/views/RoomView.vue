@@ -462,8 +462,6 @@ onUnmounted(() => {
     <section class="game-layout">
       <div class="board-panel">
         <div class="board-controlbar">
-          <div class="control-notice" :class="{ warning: notice.includes('失败') || notice.includes('断开') || notice.includes('不能') || notice.includes('用完') }">{{ notice }}</div>
-          <div class="control-item"><span class="status-label">规则</span><strong>{{ room?.rule_set === "renju" ? "有禁手" : "无禁手" }}</strong></div>
           <div class="control-item">
             <span class="status-label">我的位置</span>
             <strong class="stone-status">
@@ -482,6 +480,7 @@ onUnmounted(() => {
             <button class="secondary-button" :disabled="!activeGame || !myColor || ownUndoPending" type="button" @click="requestUndo"><Undo2 :size="18" />{{ ownUndoPending ? "等待回应" : `悔棋（${myUndoRemaining}）` }}</button>
           </div>
         </div>
+        <div class="control-notice board-notice" :class="{ warning: notice.includes('失败') || notice.includes('断开') || notice.includes('不能') || notice.includes('用完') }">{{ notice }}</div>
         <GameBoard :stones="moves" :interactive="canMove" @play="play" />
       </div>
       <aside class="settings-panel">

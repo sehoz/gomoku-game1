@@ -147,17 +147,15 @@ function undo() {
     <section class="game-layout">
       <div class="board-panel">
         <div class="board-controlbar">
-          <div class="control-notice" :class="{ warning: message.includes('不可') || message.includes('不能') }">{{ message }}</div>
-          <div class="control-item"><span class="status-label">规则</span><strong>{{ ruleSet === "renju" ? "有禁手" : "无禁手" }}</strong></div>
           <div class="control-item"><span class="status-label">我的位置</span><strong class="stone-status"><span :class="['stone-icon', `stone-icon-${playerColor}`]" />{{ playerColor === "black" ? "黑棋" : "白棋" }}</strong></div>
           <div class="control-item"><span class="status-label">当前回合</span><strong class="stone-status"><span :class="['stone-icon', `stone-icon-${turn}`]" />{{ turn === "black" ? "黑棋" : "白棋" }}</strong></div>
           <div class="control-item"><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
-          <div class="control-item"><span class="status-label">落子数</span><strong>{{ stones.length }}</strong></div>
           <div class="control-actions">
             <button class="secondary-button" type="button" @click="undo"><Undo2 :size="18" />悔棋</button>
             <button class="secondary-button" type="button" @click="reset"><RotateCcw :size="18" />重新开始</button>
           </div>
         </div>
+        <div class="control-notice board-notice" :class="{ warning: message.includes('不可') || message.includes('不能') }">{{ message }}</div>
         <GameBoard :stones="stones" :interactive="playerTurn" @play="play" />
       </div>
       <aside class="settings-panel">
