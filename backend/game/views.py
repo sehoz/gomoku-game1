@@ -270,10 +270,11 @@ def leaderboard(request):
     entries = []
     users = User.objects.filter(is_staff=False, is_superuser=False).order_by("username")
     for user in users:
-        stats = UserSerializer(user).data["stats"]
+        user_data = UserSerializer(user).data
+        stats = user_data["stats"]
         entries.append(
             {
-                "user": {"id": user.id, "username": user.username},
+                "user": {"id": user.id, "username": user.username, "avatar_url": user_data["avatar_url"]},
                 "wins": stats["wins"],
                 "totalGames": stats["totalGames"],
                 "winRate": stats["winRate"],

@@ -15,6 +15,7 @@ const refreshingOnline = ref(false);
 const roomCount = ref(0);
 const leaderboard = ref<LeaderboardEntry[]>([]);
 let roomCountTimer: number | null = null;
+let leaderboardTimer: number | null = null;
 
 function enterOnline() {
   if (!isAuthenticated()) {
@@ -55,10 +56,12 @@ onMounted(() => {
   void refreshRoomCount();
   void refreshLeaderboard();
   roomCountTimer = window.setInterval(refreshRoomCount, 1000);
+  leaderboardTimer = window.setInterval(refreshLeaderboard, 5000);
 });
 
 onUnmounted(() => {
   if (roomCountTimer !== null) window.clearInterval(roomCountTimer);
+  if (leaderboardTimer !== null) window.clearInterval(leaderboardTimer);
 });
 </script>
 
@@ -119,7 +122,7 @@ onUnmounted(() => {
       <div v-if="leaderboard.length === 0" class="empty-state">暂无排行榜数据。</div>
       <div v-else class="online-list">
         <div v-for="entry in leaderboard.slice(0, 5)" :key="entry.user.id" class="online-row">
-          <div class="online-user"><span class="rank-badge">{{ entry.rank }}</span><Avatar :username="entry.user.username" /><div><strong>{{ entry.user.username }}</strong><span>{{ entry.totalGames }} 局</span></div></div>
+          <div class="online-user"><span class="rank-badge">{{ entry.rank }}</span><Avatar :username="entry.user.username" :avatar-url="entry.user.avatar_url" /><div><strong>{{ entry.user.username }}</strong><span>{{ entry.totalGames }} 局</span></div></div>
           <div class="online-stats"><span><Trophy :size="15" />{{ entry.wins }} 胜</span><span>胜率 {{ entry.winRate }}%</span></div>
         </div>
       </div>

@@ -37,10 +37,12 @@ export interface Room {
   spectators: SpectatorSeat[];
   black_player: number | null;
   black_player_name: string | null;
+  black_player_avatar_url: string;
   black_ready: boolean;
   black_undo_remaining: number;
   white_player: number | null;
   white_player_name: string | null;
+  white_player_avatar_url: string;
   white_ready: boolean;
   white_undo_remaining: number;
   winner: string;
@@ -82,6 +84,7 @@ export interface CurrentGame {
 export interface SpectatorSeat {
   user: number;
   username: string;
+  avatar_url: string;
   seat_number: number;
   stats: UserProfile["stats"];
 }
@@ -140,7 +143,7 @@ export interface MatchReplay {
 
 export interface LeaderboardEntry {
   rank: number;
-  user: { id: number; username: string };
+  user: { id: number; username: string; avatar_url: string };
   wins: number;
   totalGames: number;
   winRate: number;

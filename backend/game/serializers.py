@@ -65,7 +65,9 @@ class RoomSerializer(serializers.ModelSerializer):
     pending_undo_request = serializers.SerializerMethodField()
     pending_seat_switch_request = serializers.SerializerMethodField()
     black_player_name = serializers.CharField(source="black_player.username", read_only=True)
+    black_player_avatar_url = serializers.SerializerMethodField()
     white_player_name = serializers.CharField(source="white_player.username", read_only=True)
+    white_player_avatar_url = serializers.SerializerMethodField()
     host_name = serializers.CharField(source="host.username", read_only=True)
 
     class Meta:
@@ -89,10 +91,12 @@ class RoomSerializer(serializers.ModelSerializer):
             "spectators",
             "black_player",
             "black_player_name",
+            "black_player_avatar_url",
             "black_ready",
             "black_undo_remaining",
             "white_player",
             "white_player_name",
+            "white_player_avatar_url",
             "white_ready",
             "white_undo_remaining",
             "winner",
@@ -109,15 +113,29 @@ class RoomSerializer(serializers.ModelSerializer):
 
     def get_spectators(self, room):
         spectators = room.spectators.select_related("user").order_by("seat_number")
-        return [
-            {
-                "user": spectator.user_id,
-                "username": spectator.user.username,
-                "seat_number": spectator.seat_number,
-                "stats": UserSerializer(spectator.user).data["stats"],
-            }
-            for spectator in spectators
-        ]
+        seats = []
+        for spectator in spectators:
+            user_data = UserSerializer(spectator.user).data
+            seats.append(
+                {
+                    "user": spectator.user_id,
+                    "username": spectator.user.username,
+                    "avatar_url": user_data["avatar_url"],
+                    "seat_number": spectator.seat_number,
+                    "stats": user_data["stats"],
+                }
+            )
+        return seats
+
+    def get_black_player_avatar_url(self, room):
+        if not room.black_player_id:
+            return ""
+        return UserSerializer(room.black_player).data["avatar_url"]
+
+    def get_white_player_avatar_url(self, room):
+        if not room.white_player_id:
+            return ""
+        return UserSerializer(room.white_player).data["avatar_url"]
 
     def get_current_game(self, room):
         game = room.current_game

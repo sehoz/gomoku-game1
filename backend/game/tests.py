@@ -327,6 +327,21 @@ class RoomLifecycleTests(TestCase):
         room.refresh_from_db()
         self.assertGreater(room.black_last_seen_at, old_seen)
 
+    def test_room_state_returns_player_avatar_urls(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        PlayerProfile.objects.update_or_create(user=black, defaults={"avatar_data_url": "data:image/png;base64,black"})
+        PlayerProfile.objects.update_or_create(user=white, defaults={"avatar_data_url": "data:image/png;base64,white"})
+        room = Room.objects.create(name="avatar-room", black_player=black, white_player=white)
+        client = APIClient()
+        client.force_authenticate(black)
+
+        response = client.get(f"/api/rooms/{room.id}/state/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["room"]["black_player_avatar_url"], "data:image/png;base64,black")
+        self.assertEqual(response.data["room"]["white_player_avatar_url"], "data:image/png;base64,white")
+
     def test_host_transfers_to_next_joined_player_when_host_leaves(self):
         black = User.objects.create_user(username="black", password="gomoku123")
         white = User.objects.create_user(username="white", password="gomoku123")
@@ -385,6 +400,7 @@ class RoomLifecycleTests(TestCase):
     def test_leaderboard_orders_by_wins(self):
         alice = User.objects.create_user(username="alice", password="gomoku123")
         bob = User.objects.create_user(username="bob", password="gomoku123")
+        PlayerProfile.objects.update_or_create(user=alice, defaults={"avatar_data_url": "data:image/png;base64,alice"})
         game = GameSession.objects.create(
             room_name="测试房间",
             black_player=alice,
@@ -399,6 +415,7 @@ class RoomLifecycleTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["entries"][0]["user"]["username"], "alice")
+        self.assertEqual(response.data["entries"][0]["user"]["avatar_url"], "data:image/png;base64,alice")
         self.assertEqual(response.data["entries"][0]["wins"], 1)
 
     def test_match_detail_returns_replay_moves(self):

@@ -278,7 +278,7 @@ async function load() {
   }
   await loadState(true);
   statePollTimer = window.setInterval(() => {
-    if (!socketConnected.value) void loadState(false);
+    void loadState(false);
   }, 1000);
   clockTimer = window.setInterval(() => {
     nowTick.value = Date.now();
@@ -618,11 +618,11 @@ onUnmounted(() => {
         <h2>玩家</h2>
         <div class="seat-list">
           <div class="seat-row">
-            <div class="seat-player"><Avatar :username="room?.black_player_name || '等待'" /><div><strong>{{ room?.black_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-black">黑棋</span><span v-if="room?.host === room?.black_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.black_ready ? 'ready' : 'waiting']">{{ room?.black_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(blackTimeLeft) }}</span></span></div></div>
+            <div class="seat-player"><Avatar :username="room?.black_player_name || '等待'" :avatar-url="room?.black_player_avatar_url" /><div><strong>{{ room?.black_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-black">黑棋</span><span v-if="room?.host === room?.black_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.black_ready ? 'ready' : 'waiting']">{{ room?.black_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(blackTimeLeft) }}</span></span></div></div>
             <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo('black')" @click="switchPosition('black')">{{ seatButtonLabel('black', Boolean(room?.black_player)) }}</button><button v-if="isHost && room?.black_player && room.black_player !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(room.black_player)">踢出</button></div>
           </div>
           <div class="seat-row">
-            <div class="seat-player"><Avatar :username="room?.white_player_name || '等待'" /><div><strong>{{ room?.white_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-white">白棋</span><span v-if="room?.host === room?.white_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.white_ready ? 'ready' : 'waiting']">{{ room?.white_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(whiteTimeLeft) }}</span></span></div></div>
+            <div class="seat-player"><Avatar :username="room?.white_player_name || '等待'" :avatar-url="room?.white_player_avatar_url" /><div><strong>{{ room?.white_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-white">白棋</span><span v-if="room?.host === room?.white_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.white_ready ? 'ready' : 'waiting']">{{ room?.white_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(whiteTimeLeft) }}</span></span></div></div>
             <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo('white')" @click="switchPosition('white')">{{ seatButtonLabel('white', Boolean(room?.white_player)) }}</button><button v-if="isHost && room?.white_player && room.white_player !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(room.white_player)">踢出</button></div>
           </div>
         </div>
@@ -630,7 +630,7 @@ onUnmounted(() => {
           <h2>观战席</h2>
           <div class="spectator-list">
             <div v-for="slot in spectatorSlots" :key="slot.seatNumber" class="spectator-row">
-              <div class="spectator-main"><span class="seat-badge">观众{{ slot.seatNumber }}</span><strong>{{ slot.user?.username || "空位" }}</strong><span v-if="slot.user && room?.host === slot.user.user" class="seat-inline-label">房主</span></div>
+              <div class="spectator-main"><Avatar :username="slot.user?.username || '空位'" :avatar-url="slot.user?.avatar_url" /><span class="seat-badge">观众{{ slot.seatNumber }}</span><strong>{{ slot.user?.username || "空位" }}</strong><span v-if="slot.user && room?.host === slot.user.user" class="seat-inline-label">房主</span></div>
               <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo(`spectator${slot.seatNumber}`)" @click="switchPosition(`spectator${slot.seatNumber}`)">{{ seatButtonLabel(`spectator${slot.seatNumber}`, Boolean(slot.user)) }}</button><button v-if="isHost && slot.user && slot.user.user !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(slot.user.user)">踢出</button></div>
             </div>
           </div>
