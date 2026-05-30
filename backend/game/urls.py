@@ -7,6 +7,7 @@ urlpatterns = [
     path("auth/login/", views.login),
     path("auth/logout/", views.logout),
     path("auth/me/", views.me),
+    path("profile/matches/", views.match_history),
     path("online/", views.online_users),
     path("rooms/", views.rooms),
     path("rooms/<int:room_id>/join/", views.join_room_view),

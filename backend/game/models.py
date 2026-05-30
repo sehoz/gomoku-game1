@@ -42,10 +42,19 @@ class Room(models.Model):
         on_delete=models.SET_NULL,
     )
     winner = models.CharField(max_length=10, blank=True)
+    current_game = models.ForeignKey(
+        "GameSession",
+        null=True,
+        blank=True,
+        related_name="current_room",
+        on_delete=models.SET_NULL,
+    )
     max_players = models.PositiveSmallIntegerField(default=2)
     max_spectators = models.PositiveSmallIntegerField(default=4)
     black_ready = models.BooleanField(default=False)
     white_ready = models.BooleanField(default=False)
+    black_last_seen_at = models.DateTimeField(null=True, blank=True)
+    white_last_seen_at = models.DateTimeField(null=True, blank=True)
     last_activity_at = models.DateTimeField(default=timezone.now)
 
     class Meta:
@@ -75,15 +84,50 @@ class Room(models.Model):
     def refresh_status(self):
         if self.occupants_count == 0:
             self.status = self.STATUS_FINISHED
-        elif self.winner:
-            self.status = self.STATUS_FINISHED
-        elif self.players_count == 2 and self.black_ready and self.white_ready:
+        elif self.current_game_id and self.current_game.status == GameSession.STATUS_PLAYING:
             self.status = self.STATUS_PLAYING
         else:
             self.status = self.STATUS_WAITING
 
     def __str__(self):
         return self.name
+
+
+class GameSession(models.Model):
+    STATUS_PLAYING = "playing"
+    STATUS_FINISHED = "finished"
+    STATUS_CHOICES = (
+        (STATUS_PLAYING, "进行中"),
+        (STATUS_FINISHED, "已结束"),
+    )
+
+    room = models.ForeignKey(Room, null=True, blank=True, related_name="games", on_delete=models.SET_NULL)
+    room_name = models.CharField(max_length=80)
+    black_player = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        related_name="black_games",
+        on_delete=models.SET_NULL,
+    )
+    white_player = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        related_name="white_games",
+        on_delete=models.SET_NULL,
+    )
+    rule_set = models.CharField(max_length=20, choices=Room.RULE_CHOICES, default=Room.RULE_STANDARD)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PLAYING)
+    winner = models.CharField(max_length=10, blank=True)
+    end_reason = models.CharField(max_length=40, blank=True)
+    started_at = models.DateTimeField(default=timezone.now)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    black_undo_used = models.PositiveSmallIntegerField(default=0)
+    white_undo_used = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["-started_at"]
 
 
 class Move(models.Model):
@@ -95,6 +139,7 @@ class Move(models.Model):
     )
 
     room = models.ForeignKey(Room, related_name="moves", on_delete=models.CASCADE)
+    game = models.ForeignKey(GameSession, related_name="moves", null=True, blank=True, on_delete=models.CASCADE)
     player = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     move_number = models.PositiveIntegerField()
     x = models.PositiveSmallIntegerField()
@@ -105,8 +150,8 @@ class Move(models.Model):
     class Meta:
         ordering = ["move_number"]
         constraints = [
-            models.UniqueConstraint(fields=["room", "move_number"], name="unique_room_move_number"),
-            models.UniqueConstraint(fields=["room", "x", "y"], name="unique_room_point"),
+            models.UniqueConstraint(fields=["game", "move_number"], name="unique_game_move_number"),
+            models.UniqueConstraint(fields=["game", "x", "y"], name="unique_game_point"),
         ]
 
 

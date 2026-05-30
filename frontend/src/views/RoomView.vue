@@ -5,6 +5,7 @@ import { Check, LogOut, MessageSquareText, Send, Undo2, X } from "lucide-vue-nex
 import { api, roomSocketUrl } from "../api";
 import Avatar from "../components/Avatar.vue";
 import GameBoard from "../components/GameBoard.vue";
+import Modal from "../components/Modal.vue";
 import { authState, isAuthenticated } from "../stores/auth";
 import { playStoneSound } from "../stores/settings";
 import { nextTurn } from "../rules";
@@ -49,15 +50,17 @@ const myRoleLabel = computed(() => {
   return "未入席";
 });
 const myReady = computed(() => (myColor.value === "black" ? room.value?.black_ready : myColor.value === "white" ? room.value?.white_ready : false));
+const activeGame = computed(() => room.value?.current_game?.status === "playing");
+const myUndoRemaining = computed(() => (myColor.value === "black" ? room.value?.black_undo_remaining ?? 3 : myColor.value === "white" ? room.value?.white_undo_remaining ?? 3 : 0));
 const currentSeatKey = computed(() => {
   if (myColor.value) return myColor.value;
   if (spectatorSeat.value) return `spectator${spectatorSeat.value.seat_number}`;
   return "";
 });
-const gameStarted = computed(() => room.value?.status !== "waiting" || moves.value.length > 0);
-const canReady = computed(() => Boolean(myColor.value && room.value?.players === 2 && room.value.status === "waiting" && moves.value.length === 0));
-const canMove = computed(() => room.value?.status === "playing" && myColor.value === turn.value);
-const canRequestUndo = computed(() => Boolean(myColor.value && moves.value.some((move) => move.player === authState.user?.id)));
+const gameStarted = computed(() => activeGame.value);
+const canReady = computed(() => Boolean(myColor.value && room.value?.players === 2 && !activeGame.value && room.value?.status !== "finished"));
+const canMove = computed(() => activeGame.value && myColor.value === turn.value);
+const canRequestUndo = computed(() => Boolean(activeGame.value && myColor.value && myUndoRemaining.value > 0 && moves.value.some((move) => move.player === authState.user?.id)));
 const canInitiateSeatSwitch = computed(() => Boolean(currentSeatKey.value && !(myColor.value && gameStarted.value)));
 const spectatorSlots = computed(() => {
   const max = room.value?.max_spectators || 0;
@@ -71,10 +74,13 @@ const spectatorSlots = computed(() => {
 });
 const statusLabel = computed(() => {
   if (!room.value) return "加载中";
-  if (room.value.winner === "black") return "黑棋获胜";
-  if (room.value.winner === "white") return "白棋获胜";
+  if (room.value.current_game?.status === "finished") {
+    if (room.value.current_game.winner === "black") return "上一局黑棋获胜";
+    if (room.value.current_game.winner === "white") return "上一局白棋获胜";
+    return "上一局已结束";
+  }
+  if (activeGame.value) return "进行中";
   if (room.value.status === "waiting") return "等待中";
-  if (room.value.status === "playing") return "进行中";
   return "已结束";
 });
 
@@ -84,8 +90,12 @@ function applyState(state: RoomState) {
   moves.value = state.moves;
   messages.value = state.messages;
   if (state.moves.length > previousMoveCount) playStoneSound();
-  if (state.room.winner) {
-    notice.value = `${state.room.winner === "black" ? "黑棋" : "白棋"}获胜。`;
+  if (state.room.current_game?.status === "finished") {
+    if (state.room.current_game.winner) {
+      notice.value = `${state.room.current_game.winner === "black" ? "黑棋" : "白棋"}获胜。本房间可继续准备下一局。`;
+    } else {
+      notice.value = "本局已结束。本房间可继续准备下一局。";
+    }
   } else if (state.room.players < 2) {
     notice.value = "等待另一名玩家加入。";
   } else if (state.room.status === "waiting") {
@@ -143,6 +153,11 @@ async function load() {
       ownSeatSwitchPending.value = false;
       seatSwitchRequest.value = null;
       notice.value = data.detail;
+    }
+    if (data.type === "peer_status") {
+      if (data.user_id !== authState.user?.id) {
+        notice.value = data.online ? `${data.username} 已重新连接。` : `${data.username} 已断开连接，等待重连。`;
+      }
     }
     if (data.type === "closed") {
       notice.value = "房间已解散。";
@@ -272,36 +287,21 @@ onUnmounted(() => {
 
 <template>
   <main class="page-shell">
-    <header class="page-header"><div><button class="link-button" type="button" @click="leave">‹ 返回房间</button><h1>{{ room?.name || "房间" }}</h1><p>黑棋在上，白棋在下；两名玩家都准备后开始。</p></div><div class="header-actions"><span class="role-pill">{{ myRoleLabel }}</span><button class="secondary-button" type="button" @click="leave"><LogOut :size="18" />离开房间</button></div></header>
+    <header class="page-header"><div><button class="link-button" type="button" @click="leave">‹ 返回房间</button><h1>{{ room?.name || "房间" }}</h1><p>黑棋在上，白棋在下；两名玩家都准备后开始。</p></div><div class="header-actions"><button class="secondary-button" type="button" @click="leave"><LogOut :size="18" />离开房间</button></div></header>
     <section class="game-layout">
       <div class="board-panel">
         <div class="board-toolbar">
           <div><span class="status-label">规则</span><strong>{{ room?.rule_set === "renju" ? "有禁手" : "无禁手" }}</strong></div>
+          <div><span class="status-label">我的位置</span><strong>{{ myRoleLabel }}</strong></div>
           <div><span class="status-label">当前回合</span><strong>{{ turn === "black" ? "黑棋" : "白棋" }}</strong></div>
           <div><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
         </div>
         <div class="game-actions">
           <button class="primary-button" :disabled="!canReady" type="button" @click="toggleReady"><Check :size="18" />{{ myReady ? "取消准备" : "准备" }}</button>
-          <button class="secondary-button" :disabled="!canRequestUndo || ownUndoPending" type="button" @click="requestUndo"><Undo2 :size="18" />{{ ownUndoPending ? "等待回应" : "申请悔棋" }}</button>
+          <button class="secondary-button" :disabled="!canRequestUndo || ownUndoPending" type="button" @click="requestUndo"><Undo2 :size="18" />{{ ownUndoPending ? "等待回应" : `悔棋（${myUndoRemaining}）` }}</button>
         </div>
         <GameBoard :stones="moves" :interactive="canMove" @play="play" />
         <div class="game-message">{{ notice }}</div>
-        <div v-if="undoRequest" class="undo-request-panel">
-          <strong>{{ undoRequest.username }} 申请悔棋</strong>
-          <span>同意后将按规则撤销对方上一步落子。</span>
-          <div class="inline-actions">
-            <button class="primary-button" type="button" @click="acceptUndo"><Check :size="16" />同意</button>
-            <button class="secondary-button" type="button" @click="rejectUndo"><X :size="16" />拒绝</button>
-          </div>
-        </div>
-        <div v-if="seatSwitchRequest" class="undo-request-panel">
-          <strong>{{ seatSwitchRequest.requester_username }} 申请换位</strong>
-          <span>对方想从{{ seatSwitchRequest.from_label }}换到你的{{ seatSwitchRequest.target_label }}位置。</span>
-          <div class="inline-actions">
-            <button class="primary-button" type="button" @click="acceptSeatSwitch"><Check :size="16" />同意</button>
-            <button class="secondary-button" type="button" @click="rejectSeatSwitch"><X :size="16" />拒绝</button>
-          </div>
-        </div>
       </div>
       <aside class="settings-panel">
         <h2>玩家</h2>
@@ -331,5 +331,23 @@ onUnmounted(() => {
         </div>
       </aside>
     </section>
+    <Modal v-if="undoRequest" title="悔棋申请" @close="rejectUndo">
+      <div class="modal-form">
+        <p><strong>{{ undoRequest.username }}</strong> 申请悔棋。同意后将按规则撤销对方上一步落子。</p>
+        <div class="inline-actions">
+          <button class="primary-button" type="button" @click="acceptUndo"><Check :size="16" />同意</button>
+          <button class="secondary-button" type="button" @click="rejectUndo"><X :size="16" />拒绝</button>
+        </div>
+      </div>
+    </Modal>
+    <Modal v-if="seatSwitchRequest" title="换位申请" @close="rejectSeatSwitch">
+      <div class="modal-form">
+        <p><strong>{{ seatSwitchRequest.requester_username }}</strong> 想从{{ seatSwitchRequest.from_label }}换到你的{{ seatSwitchRequest.target_label }}位置。</p>
+        <div class="inline-actions">
+          <button class="primary-button" type="button" @click="acceptSeatSwitch"><Check :size="16" />同意</button>
+          <button class="secondary-button" type="button" @click="rejectSeatSwitch"><X :size="16" />拒绝</button>
+        </div>
+      </div>
+    </Modal>
   </main>
 </template>

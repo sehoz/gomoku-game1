@@ -1,7 +1,8 @@
 from django.contrib.auth.models import User
+from django.db.models import Q
 from rest_framework import serializers
 
-from .models import ChatMessage, Move, Room
+from .models import ChatMessage, GameSession, Move, Room
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -12,19 +13,23 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ("id", "username", "email", "stats")
 
     def get_stats(self, user):
-        finished = Room.objects.filter(status=Room.STATUS_FINISHED).filter(
+        finished = GameSession.objects.filter(status=GameSession.STATUS_FINISHED).filter(
             black_player=user
-        ) | Room.objects.filter(status=Room.STATUS_FINISHED).filter(white_player=user)
+        ) | GameSession.objects.filter(status=GameSession.STATUS_FINISHED).filter(white_player=user)
         total = finished.count()
         wins = finished.filter(winner__in=["black", "white"]).filter(
             black_player=user,
             winner="black",
         ).count() + finished.filter(white_player=user, winner="white").count()
-        losses = max(total - wins, 0)
+        losses = finished.filter(winner__in=["black", "white"]).exclude(
+            Q(black_player=user, winner="black") | Q(white_player=user, winner="white")
+        ).count()
+        draws = max(total - wins - losses, 0)
         return {
             "totalGames": total,
             "wins": wins,
             "losses": losses,
+            "draws": draws,
             "winRate": round(wins / total * 100) if total else 0,
         }
 
@@ -43,6 +48,9 @@ class RoomSerializer(serializers.ModelSerializer):
     players = serializers.SerializerMethodField()
     spectators_count = serializers.SerializerMethodField()
     spectators = serializers.SerializerMethodField()
+    current_game = serializers.SerializerMethodField()
+    black_undo_remaining = serializers.SerializerMethodField()
+    white_undo_remaining = serializers.SerializerMethodField()
     black_player_name = serializers.CharField(source="black_player.username", read_only=True)
     white_player_name = serializers.CharField(source="white_player.username", read_only=True)
 
@@ -55,6 +63,7 @@ class RoomSerializer(serializers.ModelSerializer):
             "has_password",
             "rule_set",
             "status",
+            "current_game",
             "players",
             "max_players",
             "spectators_count",
@@ -63,9 +72,11 @@ class RoomSerializer(serializers.ModelSerializer):
             "black_player",
             "black_player_name",
             "black_ready",
+            "black_undo_remaining",
             "white_player",
             "white_player_name",
             "white_ready",
+            "white_undo_remaining",
             "winner",
         )
         read_only_fields = ("id", "created_at", "status", "winner")
@@ -87,6 +98,40 @@ class RoomSerializer(serializers.ModelSerializer):
             }
             for spectator in spectators
         ]
+
+    def get_current_game(self, room):
+        game = room.current_game
+        if not game:
+            return None
+        return {
+            "id": game.id,
+            "status": game.status,
+            "winner": game.winner,
+            "end_reason": game.end_reason,
+            "started_at": game.started_at,
+            "ended_at": game.ended_at,
+        }
+
+    def get_black_undo_remaining(self, room):
+        game = room.current_game
+        return max(3 - game.black_undo_used, 0) if game and game.status == GameSession.STATUS_PLAYING else 3
+
+    def get_white_undo_remaining(self, room):
+        game = room.current_game
+        return max(3 - game.white_undo_used, 0) if game and game.status == GameSession.STATUS_PLAYING else 3
+
+
+class MatchRecordSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    room_name = serializers.CharField()
+    rule_set = serializers.CharField()
+    color = serializers.CharField()
+    result = serializers.CharField()
+    opponent = serializers.DictField()
+    started_at = serializers.DateTimeField(allow_null=True)
+    ended_at = serializers.DateTimeField(allow_null=True)
+    end_reason = serializers.CharField()
+    moves_count = serializers.IntegerField()
 
 
 class MoveSerializer(serializers.ModelSerializer):

@@ -1,4 +1,4 @@
-import type { AiLevel, Move, OnlineUser, Room, RoomState, RuleSet, StoneColor, UserProfile } from "./types";
+import type { AiLevel, MatchRecord, Move, OnlineUser, Room, RoomState, RuleSet, StoneColor, UserProfile } from "./types";
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api";
 const wsBase = import.meta.env.VITE_WS_BASE_URL || "ws://localhost:8000/ws";
@@ -48,6 +48,9 @@ export const api = {
   },
   async onlineUsers() {
     return request<{ users: OnlineUser[] }>("/online/");
+  },
+  async matchHistory() {
+    return request<{ records: MatchRecord[] }>("/profile/matches/");
   },
   async rooms() {
     return request<Room[]>("/rooms/");

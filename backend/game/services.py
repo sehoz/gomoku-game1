@@ -4,8 +4,10 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from .models import ChatMessage, Move, Room, SpectatorSeat
+from .models import ChatMessage, GameSession, Move, Room, SpectatorSeat
 from .rules import evaluate_move, next_turn
+
+UNDO_LIMIT = 3
 
 
 class SeatSwitchNeedsConsent(ValueError):
@@ -19,9 +21,11 @@ def spectator_number_from_key(value):
 
 
 def room_stones(room):
+    game = active_or_latest_game(room)
+    queryset = game.moves if game else room.moves.filter(game__isnull=True)
     return [
         {"x": move.x, "y": move.y, "color": move.color}
-        for move in room.moves.order_by("move_number")
+        for move in queryset.order_by("move_number")
     ]
 
 
@@ -117,9 +121,122 @@ def touch_room(room):
     return room
 
 
+def player_last_seen_field(color):
+    return "black_last_seen_at" if color == "black" else "white_last_seen_at"
+
+
+def mark_room_seen(room, user):
+    if not room.pk:
+        return room
+    now = timezone.now()
+    update_fields = ["last_activity_at"]
+    room.last_activity_at = now
+    color = user_color(room, user)
+    if color:
+        field = player_last_seen_field(color)
+        setattr(room, field, now)
+        update_fields.append(field)
+    room.save(update_fields=update_fields)
+    return room
+
+
+def active_game(room):
+    game = room.current_game
+    if game and game.status == GameSession.STATUS_PLAYING:
+        return game
+    return None
+
+
+def active_or_latest_game(room):
+    return room.current_game or room.games.order_by("-started_at").first()
+
+
+def start_game(room):
+    if room.current_game and room.current_game.status == GameSession.STATUS_PLAYING:
+        return room.current_game
+    now = timezone.now()
+    game = GameSession.objects.create(
+        room=room,
+        room_name=room.name,
+        black_player=room.black_player,
+        white_player=room.white_player,
+        rule_set=room.rule_set,
+        started_at=now,
+    )
+    room.current_game = game
+    room.winner = ""
+    room.status = Room.STATUS_PLAYING
+    room.black_last_seen_at = room.black_last_seen_at or now
+    room.white_last_seen_at = room.white_last_seen_at or now
+    room.last_activity_at = now
+    room.save(update_fields=["current_game", "winner", "status", "black_last_seen_at", "white_last_seen_at", "last_activity_at"])
+    return game
+
+
+def finish_game(room, winner="", reason="finished"):
+    game = active_game(room)
+    if not game:
+        return room
+    now = timezone.now()
+    game.winner = winner or ""
+    game.status = GameSession.STATUS_FINISHED
+    game.end_reason = reason
+    game.ended_at = now
+    game.save(update_fields=["winner", "status", "end_reason", "ended_at"])
+    room.winner = winner or ""
+    room.status = Room.STATUS_WAITING
+    room.black_ready = False
+    room.white_ready = False
+    room.last_activity_at = now
+    room.save(update_fields=["winner", "status", "black_ready", "white_ready", "last_activity_at"])
+    return room
+
+
+def undo_used(game, color):
+    return game.black_undo_used if color == "black" else game.white_undo_used
+
+
+def undo_remaining(game, color):
+    return max(UNDO_LIMIT - undo_used(game, color), 0)
+
+
+def increment_undo_used(game, color):
+    if color == "black":
+        game.black_undo_used += 1
+        return "black_undo_used"
+    game.white_undo_used += 1
+    return "white_undo_used"
+
+
+def timeout_minutes():
+    return getattr(settings, "ROOM_IDLE_MINUTES", 5)
+
+
+def finish_if_player_timed_out(room):
+    if not active_game(room):
+        return room, False
+    cutoff = timezone.now() - timedelta(minutes=timeout_minutes())
+    black_old = room.black_last_seen_at and room.black_last_seen_at < cutoff
+    white_old = room.white_last_seen_at and room.white_last_seen_at < cutoff
+    if black_old and white_old:
+        return finish_game(room, "", "timeout"), True
+    if black_old:
+        return finish_game(room, "white", "disconnect_timeout"), True
+    if white_old:
+        return finish_game(room, "black", "disconnect_timeout"), True
+    return room, False
+
+
 def cleanup_idle_rooms():
     cutoff = timezone.now() - timedelta(minutes=getattr(settings, "ROOM_IDLE_MINUTES", 5))
-    return Room.objects.exclude(status=Room.STATUS_FINISHED).filter(last_activity_at__lt=cutoff).delete()[0]
+    deleted = Room.objects.filter(
+        status=Room.STATUS_WAITING,
+        games__isnull=True,
+        last_activity_at__lt=cutoff,
+    ).delete()[0]
+    for room in Room.objects.filter(status=Room.STATUS_PLAYING, last_activity_at__lt=cutoff):
+        finish_game(room, "", "timeout")
+    return deleted
 
 
 def first_free_spectator_number(room):
@@ -131,7 +248,7 @@ def first_free_spectator_number(room):
 
 
 def game_started(room):
-    return room.status != Room.STATUS_WAITING or room.moves.exists()
+    return bool(active_game(room))
 
 
 def assert_user_can_initiate_switch(room, user):
@@ -199,11 +316,11 @@ def join_room(room, user, password=""):
     if room.has_password and not room.password_matches(password):
         raise ValueError("房间密码不正确")
     if room.black_player_id == user.id or room.white_player_id == user.id:
-        touch_room(room)
+        mark_room_seen(room, user)
         return room
     existing_spectator = spectator_seat(room, user)
     if existing_spectator and room.players_count >= room.max_players:
-        touch_room(room)
+        mark_room_seen(room, user)
         return room
     if room.status == Room.STATUS_FINISHED:
         raise ValueError("房间已结束")
@@ -223,12 +340,20 @@ def join_room(room, user, password=""):
     room.refresh_status()
     room.last_activity_at = timezone.now()
     room.save()
+    mark_room_seen(room, user)
     return room
 
 
 @transaction.atomic
 def leave_room(room, user):
     room = Room.objects.select_for_update().get(id=room.id)
+    if game_started(room):
+        color = user_color(room, user)
+        if room.status == Room.STATUS_PLAYING and color:
+            finish_game(room, opponent_color(color), "leave")
+        else:
+            touch_room(room)
+        room.refresh_from_db()
     if room.black_player_id == user.id:
         room.black_player = None
         room.black_ready = False
@@ -260,7 +385,7 @@ def switch_position(room, user, target_seat):
     if current_seat is None:
         raise ValueError("你不在该房间")
     if current_seat == target_seat:
-        touch_room(room)
+        mark_room_seen(room, user)
         return room
     assert_user_can_initiate_switch(room, user)
     target_user = seat_user(room, target_seat)
@@ -310,14 +435,21 @@ def set_ready(room, user, ready=True):
     color = user_color(room, user)
     if color is None:
         raise ValueError("只有黑棋或白棋玩家可以准备")
-    if room.status == Room.STATUS_PLAYING or room.moves.exists():
+    if active_game(room):
         raise ValueError("对局已经开始，不能修改准备状态")
     if color == "black":
         room.black_ready = bool(ready)
     else:
         room.white_ready = bool(ready)
+    now = timezone.now()
+    setattr(room, player_last_seen_field(color), now)
+    if room.players_count == 2 and room.black_ready and room.white_ready:
+        room.black_last_seen_at = room.black_last_seen_at or now
+        room.white_last_seen_at = room.white_last_seen_at or now
+        start_game(room)
+        return room
     room.refresh_status()
-    room.last_activity_at = timezone.now()
+    room.last_activity_at = now
     room.save()
     return room
 
@@ -332,8 +464,13 @@ def make_move(room, user, x, y):
         raise ValueError("等待另一名玩家加入")
     if room.status == Room.STATUS_FINISHED:
         raise ValueError("对局已经结束")
-    if room.status != Room.STATUS_PLAYING:
+    room, timed_out = finish_if_player_timed_out(room)
+    if timed_out:
+        raise ValueError("对局已因玩家离线超时结束")
+    game = active_game(room)
+    if not game:
         raise ValueError("双方准备后才能开始对局")
+    mark_room_seen(room, user)
 
     stones = room_stones(room)
     if next_turn(stones) != color:
@@ -345,6 +482,7 @@ def make_move(room, user, x, y):
 
     Move.objects.create(
         room=room,
+        game=game,
         player=user,
         move_number=len(stones) + 1,
         x=int(x),
@@ -352,14 +490,9 @@ def make_move(room, user, x, y):
         color=color,
     )
     if result.winner:
-        room.winner = result.winner
-        room.status = Room.STATUS_FINISHED
-        room.last_activity_at = timezone.now()
-        room.save(update_fields=["winner", "status", "last_activity_at"])
+        finish_game(room, result.winner, "forbidden" if result.forbidden else "win")
     elif result.status == "draw":
-        room.status = Room.STATUS_FINISHED
-        room.last_activity_at = timezone.now()
-        room.save(update_fields=["status", "last_activity_at"])
+        finish_game(room, "", "draw")
     else:
         touch_room(room)
     return room, result
@@ -371,7 +504,12 @@ def undo_last_turn(room, requester):
     requester_color = user_color(room, requester)
     if requester_color is None:
         raise ValueError("你不在该房间")
-    moves = list(room.moves.select_for_update().order_by("-move_number")[:2])
+    game = active_game(room)
+    if not game:
+        raise ValueError("当前没有进行中的对局")
+    if undo_remaining(game, requester_color) <= 0:
+        raise ValueError("本局悔棋次数已用完")
+    moves = list(game.moves.select_for_update().order_by("-move_number")[:2])
     if not moves:
         raise ValueError("当前没有可以悔棋的落子")
 
@@ -385,9 +523,9 @@ def undo_last_turn(room, requester):
         raise ValueError("只能撤销你的上一步落子")
 
     Move.objects.filter(id__in=delete_ids).delete()
-    if room.status == Room.STATUS_FINISHED:
-        room.status = Room.STATUS_PLAYING if room.players_count == 2 else Room.STATUS_WAITING
     room.winner = ""
+    undo_field = increment_undo_used(game, requester_color)
+    game.save(update_fields=[undo_field])
     room.refresh_status()
     room.last_activity_at = timezone.now()
     room.save(update_fields=["status", "winner", "last_activity_at"])

@@ -6,7 +6,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from .ai import choose_ai_move
-from .models import Room, SpectatorSeat
+from .models import GameSession, Room, SpectatorSeat
 from .rules import evaluate_move
 from .services import (
     SeatSwitchNeedsConsent,
@@ -128,10 +128,9 @@ class AiTests(TestCase):
 class RoomLifecycleTests(TestCase):
     def playable_room(self, black, white):
         room = Room.objects.create(name="测试房间", black_player=black, white_player=white)
-        room.black_ready = True
-        room.white_ready = True
-        room.refresh_status()
-        room.save()
+        set_ready(room, black, True)
+        set_ready(room, white, True)
+        room.refresh_from_db()
         return room
 
     def test_last_player_leave_deletes_room(self):
@@ -167,6 +166,19 @@ class RoomLifecycleTests(TestCase):
 
         self.assertEqual(removed, 2)
         self.assertEqual(room.moves.count(), 0)
+
+    def test_each_player_has_three_successful_undos_per_game(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = self.playable_room(black, white)
+
+        for x in range(3):
+            make_move(room, black, x, 7)
+            undo_last_turn(room, black)
+        make_move(room, black, 4, 7)
+
+        with self.assertRaisesMessage(ValueError, "本局悔棋次数已用完"):
+            undo_last_turn(room, black)
 
     def test_room_name_must_be_unique_among_active_rooms(self):
         owner = User.objects.create_user(username="owner", password="gomoku123")
@@ -209,6 +221,42 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(room.status, Room.STATUS_PLAYING)
         make_move(room, black, 7, 7)
         self.assertEqual(room.moves.count(), 1)
+        self.assertEqual(GameSession.objects.count(), 1)
+
+    def test_finished_game_is_logged_without_deleting_room(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = self.playable_room(black, white)
+
+        for x in range(4):
+            make_move(room, black, x, 0)
+            make_move(room, white, x, 1)
+        make_move(room, black, 4, 0)
+        room.refresh_from_db()
+        game = room.current_game
+
+        self.assertTrue(Room.objects.filter(id=room.id).exists())
+        self.assertEqual(room.status, Room.STATUS_WAITING)
+        self.assertEqual(game.status, GameSession.STATUS_FINISHED)
+        self.assertEqual(game.winner, "black")
+        self.assertIsNotNone(game.ended_at)
+
+    def test_profile_match_history_uses_game_sessions(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = self.playable_room(black, white)
+        for x in range(4):
+            make_move(room, black, x, 0)
+            make_move(room, white, x, 1)
+        make_move(room, black, 4, 0)
+        client = APIClient()
+        client.force_authenticate(black)
+
+        response = client.get("/api/profile/matches/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["records"][0]["room_name"], "测试房间")
+        self.assertEqual(response.data["records"][0]["result"], "win")
 
     def test_switch_to_empty_spectator_seat_directly(self):
         black = User.objects.create_user(username="black", password="gomoku123")

@@ -8,12 +8,13 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from .ai import choose_ai_move
-from .models import ChatMessage, Room
+from .models import ChatMessage, GameSession, Room
 from .presence import online_users_payload
 from .rules import evaluate_move
 from .serializers import (
     ChatMessageSerializer,
     LoginSerializer,
+    MatchRecordSerializer,
     RegisterSerializer,
     RoomSerializer,
     RoomStateSerializer,
@@ -21,6 +22,7 @@ from .serializers import (
 )
 from .services import (
     SeatSwitchNeedsConsent,
+    active_or_latest_game,
     add_chat,
     cleanup_idle_rooms,
     ensure_room_member,
@@ -83,6 +85,48 @@ def me(request):
 
 
 @api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def match_history(request):
+    queryset = (
+        GameSession.objects.filter(status=GameSession.STATUS_FINISHED)
+        .filter(Q(black_player=request.user) | Q(white_player=request.user))
+        .select_related("room", "black_player", "white_player")
+        .prefetch_related("moves")
+        .order_by("-ended_at", "-started_at")[:20]
+    )
+    records = []
+    for game in queryset:
+        color = "black" if game.black_player_id == request.user.id else "white"
+        opponent = game.white_player if color == "black" else game.black_player
+        if game.winner == color:
+            result = "win"
+        elif game.winner in {"black", "white"}:
+            result = "loss"
+        elif game.end_reason == "draw":
+            result = "draw"
+        else:
+            result = "unfinished"
+        records.append(
+            {
+                "id": game.id,
+                "room_name": game.room.name if game.room else game.room_name,
+                "rule_set": game.rule_set,
+                "color": color,
+                "result": result,
+                "opponent": {
+                    "id": opponent.id if opponent else None,
+                    "username": opponent.username if opponent else "未知玩家",
+                },
+                "started_at": game.started_at,
+                "ended_at": game.ended_at,
+                "end_reason": game.end_reason,
+                "moves_count": game.moves.count(),
+            }
+        )
+    return Response({"records": MatchRecordSerializer(records, many=True).data})
+
+
+@api_view(["GET"])
 @permission_classes([AllowAny])
 def online_users(request):
     return Response({"users": online_users_payload()})
@@ -96,7 +140,7 @@ def rooms(request):
         queryset = (
             Room.objects.filter(Q(black_player__isnull=False) | Q(white_player__isnull=False) | Q(spectators__isnull=False))
             .exclude(status=Room.STATUS_FINISHED)
-            .select_related("black_player", "white_player")
+            .select_related("black_player", "white_player", "current_game")
             .prefetch_related("spectators__user")
         )
         return Response(RoomSerializer(queryset.distinct(), many=True).data)
@@ -150,9 +194,10 @@ def room_state(request, room_id):
         ensure_room_member(room, request.user)
     except ValueError:
         return Response({"detail": "请先加入房间"}, status=status.HTTP_403_FORBIDDEN)
+    game = active_or_latest_game(room)
     data = {
         "room": room,
-        "moves": room.moves.all(),
+        "moves": game.moves.all() if game else room.moves.filter(game__isnull=True),
         "messages": room.messages.all()[:100],
     }
     return Response(RoomStateSerializer(data).data)

@@ -15,6 +15,8 @@ const loading = ref(false);
 const authOpen = ref(false);
 const createOpen = ref(false);
 const joinRoom = ref<Room | null>(null);
+const createError = ref("");
+const joinError = ref("");
 const password = ref("");
 const form = ref({ name: "好友对局", rule_set: "standard" as RuleSet, has_password: false, password: "" });
 let refreshTimer: number | null = null;
@@ -45,6 +47,8 @@ function timeAgo(value: string) {
 async function enter(room: Room) {
   error.value = "";
   if (room.has_password) {
+    password.value = "";
+    joinError.value = "";
     joinRoom.value = room;
     return;
   }
@@ -58,26 +62,27 @@ async function enter(room: Room) {
 
 async function submitJoin() {
   if (!joinRoom.value) return;
+  joinError.value = "";
   try {
     const next = await api.joinRoom(joinRoom.value.id, password.value);
     router.push(`/rooms/${next.id}`);
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "加入失败";
+    joinError.value = err instanceof Error ? err.message : "加入失败";
   }
 }
 
 async function create() {
   const name = form.value.name.trim();
+  createError.value = "";
   if (rooms.value.some((room) => room.name.trim().toLowerCase() === name.toLowerCase())) {
-    error.value = "房间名重复";
-    createOpen.value = false;
+    createError.value = "房间名重复";
     return;
   }
   try {
     const room = await api.createRoom({ ...form.value, name });
     router.push(`/rooms/${room.id}`);
   } catch (err) {
-    error.value = err instanceof Error ? err.message : "创建失败";
+    createError.value = err instanceof Error ? err.message : "创建失败";
   }
 }
 
@@ -105,7 +110,7 @@ onUnmounted(() => {
       <div><RouterLink class="back-link" to="/">‹ 返回首页</RouterLink><h1>联机对战</h1><p>登录后可以创建或加入房间。</p></div>
       <div v-if="isAuthenticated()" class="header-actions">
         <button class="secondary-button" type="button" @click="load"><RefreshCw :size="18" :class="{ spinning: loading }" />刷新列表</button>
-        <button class="primary-button" type="button" @click="createOpen = true"><Plus :size="18" />创建房间</button>
+        <button class="primary-button" type="button" @click="createOpen = true; createError = ''"><Plus :size="18" />创建房间</button>
       </div>
     </header>
     <section v-if="!isAuthenticated()" class="locked-panel">
@@ -132,6 +137,7 @@ onUnmounted(() => {
     <AuthModal v-if="authOpen" @close="authOpen = false" />
     <Modal v-if="createOpen" title="创建房间" @close="createOpen = false">
       <form class="modal-form" @submit.prevent="create">
+        <p v-if="createError" class="form-error">{{ createError }}</p>
         <label>房间名<input v-model="form.name" /></label>
         <label>规则<select v-model="form.rule_set"><option value="standard">无禁手</option><option value="renju">有禁手</option></select></label>
         <label class="checkbox-row"><input v-model="form.has_password" type="checkbox" />设置密码</label>
@@ -141,6 +147,7 @@ onUnmounted(() => {
     </Modal>
     <Modal v-if="joinRoom" title="输入房间密码" @close="joinRoom = null">
       <form class="modal-form" @submit.prevent="submitJoin">
+        <p v-if="joinError" class="form-error">{{ joinError }}</p>
         <label>密码<input v-model="password" type="password" /></label>
         <button class="primary-button" type="submit">确认进入</button>
       </form>

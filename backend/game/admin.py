@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import ChatMessage, Move, Room, SpectatorSeat
+from .models import ChatMessage, GameSession, Move, Room, SpectatorSeat
 
 
 @admin.register(Room)
@@ -11,7 +11,13 @@ class RoomAdmin(admin.ModelAdmin):
 
 @admin.register(Move)
 class MoveAdmin(admin.ModelAdmin):
-    list_display = ("room", "move_number", "color", "x", "y", "created_at")
+    list_display = ("room", "game", "move_number", "color", "x", "y", "created_at")
+
+
+@admin.register(GameSession)
+class GameSessionAdmin(admin.ModelAdmin):
+    list_display = ("room_name", "status", "winner", "started_at", "ended_at")
+    search_fields = ("room_name", "black_player__username", "white_player__username")
 
 
 @admin.register(ChatMessage)

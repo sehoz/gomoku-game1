@@ -12,15 +12,46 @@ from .serializers import RoomStateSerializer
 from .services import (
     SeatSwitchNeedsConsent,
     accept_seat_switch,
+    active_game,
+    active_or_latest_game,
     add_chat,
+    finish_if_player_timed_out,
     leave_room,
+    mark_room_seen,
     make_move,
     set_ready,
     switch_position,
     touch_room,
     undo_last_turn,
+    undo_remaining,
     user_color,
 )
+
+ROOM_CONNECTIONS = {}
+
+
+def connection_counts(room_id):
+    return ROOM_CONNECTIONS.setdefault(int(room_id), {})
+
+
+def register_connection(room_id, user_id):
+    counts = connection_counts(room_id)
+    counts[user_id] = counts.get(user_id, 0) + 1
+
+
+def unregister_connection(room_id, user_id):
+    counts = connection_counts(room_id)
+    if user_id not in counts:
+        return
+    counts[user_id] -= 1
+    if counts[user_id] <= 0:
+        counts.pop(user_id, None)
+    if not counts:
+        ROOM_CONNECTIONS.pop(int(room_id), None)
+
+
+def is_connected(room_id, user_id):
+    return connection_counts(room_id).get(user_id, 0) > 0
 
 
 @sync_to_async
@@ -42,20 +73,28 @@ def is_room_member(room_id, user):
 
 
 @sync_to_async
-def mark_room_active(room_id):
+def mark_room_active(room_id, user=None):
     try:
-        touch_room(Room.objects.get(id=room_id))
+        room = Room.objects.get(id=room_id)
+        if user:
+            mark_room_seen(room, user)
+            room.refresh_from_db()
+            finished_room, finished = finish_if_player_timed_out(room)
+            return {"finished": finished, "room_id": finished_room.id}
+        touch_room(room)
     except Room.DoesNotExist:
         pass
+    return {"finished": False, "room_id": int(room_id)}
 
 
 @sync_to_async
 def serialize_state(room_id):
     room = Room.objects.get(id=room_id)
+    game = active_or_latest_game(room)
     return RoomStateSerializer(
         {
             "room": room,
-            "moves": room.moves.all(),
+            "moves": game.moves.all() if game else room.moves.filter(game__isnull=True),
             "messages": room.messages.all()[:100],
         }
     ).data
@@ -68,7 +107,13 @@ def create_chat(room_id, user, text):
 
 @sync_to_async
 def create_move(room_id, user, x, y):
-    room, result = make_move(Room.objects.get(id=room_id), user, x, y)
+    room = Room.objects.get(id=room_id)
+    color = user_color(room, user)
+    if color == "black" and room.white_player_id and not is_connected(room_id, room.white_player_id):
+        raise ValueError("白棋已离线，等待对方重连或超时结束")
+    if color == "white" and room.black_player_id and not is_connected(room_id, room.black_player_id):
+        raise ValueError("黑棋已离线，等待对方重连或超时结束")
+    room, result = make_move(room, user, x, y)
     return result.__dict__
 
 
@@ -113,9 +158,14 @@ def create_undo_request(room_id, user):
         raise ValueError("你不在该房间")
     if room.players_count < 2:
         raise ValueError("等待另一名玩家加入")
-    if not room.moves.filter(player=user).exists():
+    game = active_game(room)
+    if not game:
+        raise ValueError("当前没有进行中的对局")
+    if not game.moves.filter(player=user).exists():
         raise ValueError("当前没有可以悔棋的落子")
-    touch_room(room)
+    if undo_remaining(game, color) <= 0:
+        raise ValueError("本局悔棋次数已用完")
+    mark_room_seen(room, user)
     return {"user_id": user.id, "username": user.username, "color": color}
 
 
@@ -176,11 +226,21 @@ class RoomConsumer(AsyncWebsocketConsumer):
         self.group_name = f"room_{self.room_id}"
         await self.channel_layer.group_add(self.group_name, self.channel_name)
         await self.accept()
-        await mark_room_active(self.room_id)
+        register_connection(self.room_id, self.user.id)
+        await mark_room_active(self.room_id, self.user)
+        await self.channel_layer.group_send(
+            self.group_name,
+            {"type": "peer.status", "user_id": self.user.id, "username": self.user.username, "online": True},
+        )
         await self.send_state()
 
     async def disconnect(self, _close_code):
         if hasattr(self, "group_name"):
+            unregister_connection(self.room_id, self.user.id)
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "peer.status", "user_id": self.user.id, "username": self.user.username, "online": False},
+            )
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive(self, text_data=None, bytes_data=None):
@@ -191,7 +251,9 @@ class RoomConsumer(AsyncWebsocketConsumer):
                 await create_chat(self.room_id, self.user, payload.get("text", ""))
                 await self.broadcast_state()
             elif event_type == "ping":
-                await mark_room_active(self.room_id)
+                result = await mark_room_active(self.room_id, self.user)
+                if result.get("finished"):
+                    await self.broadcast_state()
             elif event_type == "move":
                 await create_move(self.room_id, self.user, payload.get("x"), payload.get("y"))
                 await self.broadcast_state()
@@ -288,6 +350,16 @@ class RoomConsumer(AsyncWebsocketConsumer):
 
     async def seat_switch_result(self, event):
         await self.send_json({"type": "seat_switch_result", "accepted": event["accepted"], "detail": event["detail"]})
+
+    async def peer_status(self, event):
+        await self.send_json(
+            {
+                "type": "peer_status",
+                "user_id": event["user_id"],
+                "username": event["username"],
+                "online": event["online"],
+            }
+        )
 
     async def send_state(self):
         state = await serialize_state(self.room_id)
