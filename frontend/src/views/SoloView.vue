@@ -19,6 +19,12 @@ const aiRequestId = ref(0);
 const turn = computed(() => nextTurn(stones.value));
 const aiColor = computed(() => opponent(playerColor.value));
 const playerTurn = computed(() => status.value === "playing" && turn.value === playerColor.value);
+const localDirections = [
+  [1, 0],
+  [0, 1],
+  [1, 1],
+  [1, -1],
+] as const;
 const statusLabel = computed(() => {
   if (thinking.value) return "AI 思考中";
   return {
@@ -29,7 +35,35 @@ const statusLabel = computed(() => {
   }[status.value];
 });
 
-function localRandomAiMove() {
+function localLineScore(x: number, y: number, color: StoneColor) {
+  const board = new Map(stones.value.map((stone) => [`${stone.x},${stone.y}`, stone.color]));
+  board.set(`${x},${y}`, color);
+  let score = 0;
+  for (const [dx, dy] of localDirections) {
+    let count = 1;
+    let openEnds = 0;
+    for (const sign of [-1, 1]) {
+      let cx = x + dx * sign;
+      let cy = y + dy * sign;
+      while (cx >= 0 && cy >= 0 && cx < 15 && cy < 15 && board.get(`${cx},${cy}`) === color) {
+        count += 1;
+        cx += dx * sign;
+        cy += dy * sign;
+      }
+      if (cx >= 0 && cy >= 0 && cx < 15 && cy < 15 && !board.has(`${cx},${cy}`)) openEnds += 1;
+    }
+    if (count >= 5) score += 1_000_000;
+    else if (count === 4 && openEnds === 2) score += 240_000;
+    else if (count === 4 && openEnds === 1) score += 90_000;
+    else if (count === 3 && openEnds === 2) score += 34_000;
+    else if (count === 3 && openEnds === 1) score += 8_000;
+    else if (count === 2 && openEnds === 2) score += 2_400;
+    else score += count * 80 + openEnds * 30;
+  }
+  return score;
+}
+
+function localAiMove() {
   const moves = [];
   const occupied = new Set(stones.value.map((stone) => `${stone.x},${stone.y}`));
   for (let y = 0; y < 15; y += 1) {
@@ -41,7 +75,19 @@ function localRandomAiMove() {
   }
   const safeMoves = moves.filter((move) => !move.result.forbidden);
   const pool = safeMoves.length ? safeMoves : moves;
-  return pool[Math.floor(Math.random() * pool.length)] || null;
+  const player = playerColor.value;
+  const immediateWin = pool.find((move) => evaluateMove(stones.value, move.x, move.y, aiColor.value, ruleSet.value).winner === aiColor.value);
+  if (immediateWin) return immediateWin;
+  const blockWin = pool.find((move) => evaluateMove(stones.value, move.x, move.y, player, ruleSet.value).winner === player);
+  if (blockWin) return blockWin;
+  const scored = pool
+    .map((move) => ({
+      ...move,
+      score: localLineScore(move.x, move.y, aiColor.value) * 1.22 + localLineScore(move.x, move.y, player) * 1.08,
+    }))
+    .sort((a, b) => b.score - a.score);
+  if (aiLevel.value === "easy") return scored[Math.floor(Math.random() * Math.min(6, scored.length))] || null;
+  return scored[0] || null;
 }
 
 function applyAiMove(move: Move, result: { status: string; winner?: StoneColor; reason?: string; forbidden?: boolean }) {
@@ -79,7 +125,7 @@ async function aiPlay() {
     applyAiMove({ x: data.move.x, y: data.move.y, color: aiColor.value }, data.result);
   } catch (err) {
     if (requestId !== aiRequestId.value) return;
-    const fallback = localRandomAiMove();
+    const fallback = localAiMove();
     if (!fallback) {
       status.value = "draw";
       message.value = "平局。";
@@ -87,7 +133,7 @@ async function aiPlay() {
     }
     applyAiMove({ x: fallback.x, y: fallback.y, color: aiColor.value }, fallback.result);
     if (!fallback.result.reason && !fallback.result.winner) {
-      message.value = "AI 已使用本地随机落子。";
+      message.value = "AI 已使用本地策略落子。";
     }
   } finally {
     if (requestId === aiRequestId.value) thinking.value = false;
@@ -146,7 +192,7 @@ function undo() {
     </header>
     <section class="game-layout">
       <div class="board-panel">
-        <div class="board-controlbar">
+        <div class="board-controlbar solo-controlbar">
           <div class="control-item"><span class="status-label">我的位置</span><strong class="stone-status"><span :class="['stone-icon', `stone-icon-${playerColor}`]" />{{ playerColor === "black" ? "黑棋" : "白棋" }}</strong></div>
           <div class="control-item"><span class="status-label">当前回合</span><strong class="stone-status"><span :class="['stone-icon', `stone-icon-${turn}`]" />{{ turn === "black" ? "黑棋" : "白棋" }}</strong></div>
           <div class="control-item"><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>

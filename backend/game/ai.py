@@ -32,8 +32,7 @@ def board_after(stones, x, y, color):
     return board
 
 
-def line_score(stones, x, y, color, board_size=15):
-    board = board_after(stones, x, y, color)
+def line_shape_score(board, x, y, color, board_size=15):
     score = 0
     for dx, dy in DIRECTIONS:
         count = 1
@@ -48,27 +47,27 @@ def line_score(stones, x, y, color, board_size=15):
             if inside(cx, cy, board_size) and key(cx, cy) not in board:
                 open_ends += 1
         if count >= 5:
-            score += 1_000_000
+            score += 5_000_000
         elif count == 4 and open_ends == 2:
-            score += 220_000
+            score += 900_000
         elif count == 4 and open_ends == 1:
-            score += 90_000
+            score += 260_000
         elif count == 3 and open_ends == 2:
-            score += 35_000
+            score += 95_000
         elif count == 3 and open_ends == 1:
-            score += 9_000
+            score += 18_000
         elif count == 2 and open_ends == 2:
-            score += 3_000
+            score += 7_000
         elif count == 2 and open_ends == 1:
-            score += 700
+            score += 1_200
         else:
-            score += count * 80 + open_ends * 20
+            score += count * 90 + open_ends * 35
     return score
 
 
 def center_score(x, y, board_size=15):
     center = (board_size - 1) / 2
-    return max(0, 40 - int((abs(x - center) + abs(y - center)) * 4))
+    return max(0, 60 - int((abs(x - center) + abs(y - center)) * 5))
 
 
 def legal_candidates(stones, board_size, color, rule_set, radius):
@@ -89,16 +88,73 @@ def safe_candidates(stones, board_size, color, rule_set, radius):
     return safe or legal
 
 
+def immediate_winning_moves(stones, board_size, color, rule_set, radius=2):
+    moves = []
+    for move in safe_candidates(stones, board_size, color, rule_set, radius):
+        result = evaluate_move(stones, move["x"], move["y"], color, rule_set, board_size)
+        if result.winner == color:
+            moves.append(move)
+    return moves
+
+
 def move_score(stones, move, color, rule_set, board_size):
     result = evaluate_move(stones, move["x"], move["y"], color, rule_set, board_size)
     if result.forbidden:
-        return -2_000_000
+        return -8_000_000
     if result.winner == color:
-        return 3_000_000
+        return 9_000_000
     other = opponent(color)
-    attack = line_score(stones, move["x"], move["y"], color, board_size)
-    defense = line_score(stones, move["x"], move["y"], other, board_size)
-    return attack * 1.18 + defense * 1.05 + center_score(move["x"], move["y"], board_size)
+    attack_board = board_after(stones, move["x"], move["y"], color)
+    defense_board = board_after(stones, move["x"], move["y"], other)
+    attack = line_shape_score(attack_board, move["x"], move["y"], color, board_size)
+    defense = line_shape_score(defense_board, move["x"], move["y"], other, board_size)
+    next_stones = [*stones, {"x": move["x"], "y": move["y"], "color": color}]
+    threat_count = len(immediate_winning_moves(next_stones, board_size, color, rule_set, 2))
+    return attack * 1.28 + defense * 1.12 + threat_count * 360_000 + center_score(move["x"], move["y"], board_size)
+
+
+def ordered_candidates(stones, board_size, color, rule_set, radius, limit=None):
+    moves = safe_candidates(stones, board_size, color, rule_set, radius)
+    moves = sorted(moves, key=lambda move: move_score(stones, move, color, rule_set, board_size), reverse=True)
+    return moves[:limit] if limit else moves
+
+
+def creates_double_threat(stones, move, board_size, color, rule_set):
+    next_stones = [*stones, {"x": move["x"], "y": move["y"], "color": color}]
+    return len(immediate_winning_moves(next_stones, board_size, color, rule_set, 2)) >= 2
+
+
+def best_static_score(stones, board_size, color, rule_set):
+    own = ordered_candidates(stones, board_size, color, rule_set, 2, 5)
+    other = ordered_candidates(stones, board_size, opponent(color), rule_set, 2, 5)
+    own_score = max((move_score(stones, move, color, rule_set, board_size) for move in own), default=0)
+    other_score = max((move_score(stones, move, opponent(color), rule_set, board_size) for move in other), default=0)
+    return own_score - other_score * 0.92
+
+
+def hard_search_score(stones, move, board_size, ai_color, rule_set):
+    player_color = opponent(ai_color)
+    next_stones = [*stones, {"x": move["x"], "y": move["y"], "color": ai_color}]
+    score = move_score(stones, move, ai_color, rule_set, board_size)
+    if creates_double_threat(stones, move, board_size, ai_color, rule_set):
+        score += 1_400_000
+
+    player_wins = immediate_winning_moves(next_stones, board_size, player_color, rule_set, 2)
+    if player_wins:
+        score -= 2_800_000 * len(player_wins)
+
+    replies = ordered_candidates(next_stones, board_size, player_color, rule_set, 2, 8)
+    if replies:
+        worst_reply = -10_000_000
+        for reply in replies:
+            after_reply = [*next_stones, {"x": reply["x"], "y": reply["y"], "color": player_color}]
+            reply_score = move_score(next_stones, reply, player_color, rule_set, board_size) - best_static_score(after_reply, board_size, ai_color, rule_set) * 0.35
+            worst_reply = max(worst_reply, reply_score)
+        score -= worst_reply * 0.88
+    followups = ordered_candidates(next_stones, board_size, ai_color, rule_set, 2, 4)
+    if followups:
+        score += max(move_score(next_stones, follow, ai_color, rule_set, board_size) for follow in followups) * 0.18
+    return score
 
 
 def choose_ai_move(stones, board_size, ai_color, rule_set, ai_level):
@@ -110,27 +166,35 @@ def choose_ai_move(stones, board_size, ai_color, rule_set, ai_level):
         return random.choice(choices)
 
     player_color = opponent(ai_color)
-    for move in choices:
-        result = evaluate_move(stones, move["x"], move["y"], ai_color, rule_set, board_size)
-        if result.winner == ai_color:
-            return move
-    for move in choices:
-        if validate_move(stones, move["x"], move["y"], player_color, rule_set, board_size).ok:
-            result = evaluate_move(stones, move["x"], move["y"], player_color, rule_set, board_size)
-            if result.winner == player_color:
-                return move
+    own_wins = immediate_winning_moves(stones, board_size, ai_color, rule_set, radius)
+    if own_wins:
+        return sorted(own_wins, key=lambda move: center_score(move["x"], move["y"], board_size), reverse=True)[0]
+
+    player_wins = immediate_winning_moves(stones, board_size, player_color, rule_set, radius)
+    if player_wins:
+        return sorted(player_wins, key=lambda move: move_score(stones, move, ai_color, rule_set, board_size), reverse=True)[0]
+
+    own_forks = [move for move in choices if creates_double_threat(stones, move, board_size, ai_color, rule_set)]
+    if own_forks:
+        return sorted(own_forks, key=lambda move: move_score(stones, move, ai_color, rule_set, board_size), reverse=True)[0]
+
+    opponent_forks = [
+        move
+        for move in safe_candidates(stones, board_size, player_color, rule_set, radius)
+        if creates_double_threat(stones, move, board_size, player_color, rule_set)
+    ]
+    if opponent_forks:
+        blocks = [move for move in opponent_forks if validate_move(stones, move["x"], move["y"], ai_color, rule_set, board_size).ok]
+        if blocks:
+            return sorted(blocks, key=lambda move: move_score(stones, move, ai_color, rule_set, board_size), reverse=True)[0]
 
     scored = []
-    for move in choices:
+    for move in ordered_candidates(stones, board_size, ai_color, rule_set, radius, 14 if ai_level == "hard" else 8):
         score = move_score(stones, move, ai_color, rule_set, board_size)
         if ai_level == "hard":
-            next_stones = [*stones, {"x": move["x"], "y": move["y"], "color": ai_color}]
-            replies = safe_candidates(next_stones, board_size, player_color, rule_set, 2)
-            if replies:
-                best_reply = max(move_score(next_stones, reply, player_color, rule_set, board_size) for reply in replies)
-                score -= best_reply * 0.62
+            score = hard_search_score(stones, move, board_size, ai_color, rule_set)
         scored.append({**move, "score": score})
     scored.sort(key=lambda item: item["score"], reverse=True)
     if ai_level == "normal":
         return random.choice(scored[: min(2, len(scored))])
-    return scored[0]
+    return {"x": scored[0]["x"], "y": scored[0]["y"]}

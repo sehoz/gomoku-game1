@@ -59,29 +59,98 @@ def window_includes_center(start, length, center):
     return start <= center < start + length
 
 
-def has_four_threat(cells, center):
-    for start in range(0, len(cells) - 4):
-        if not window_includes_center(start, 5, center):
+def line_positions(x, y, dx, dy, board_size=15):
+    sx, sy = x, y
+    while inside(sx - dx, sy - dy, board_size):
+        sx -= dx
+        sy -= dy
+    positions = []
+    while inside(sx, sy, board_size):
+        positions.append((sx, sy))
+        sx += dx
+        sy += dy
+    return positions
+
+
+def open_four_exists(board, x, y, dx, dy, color, board_size=15, required=()):
+    required = set(required)
+    positions = line_positions(x, y, dx, dy, board_size)
+    values = [board.get(key(px, py), ".") for px, py in positions]
+    for start in range(0, len(values) - 5):
+        window = values[start : start + 6]
+        if window != [".", color, color, color, color, "."]:
             continue
-        window = cells[start : start + 5]
-        if window.count("B") == 4 and window.count(".") == 1:
+        window_positions = set(positions[start : start + 6])
+        if required.issubset(window_positions):
             return True
     return False
 
 
-def has_open_three(cells, center):
-    patterns = {".BBB.", ".BB.B.", ".B.BB.", ".B.B.B."}
-    for size in {len(pattern) for pattern in patterns}:
-        for start in range(0, len(cells) - size + 1):
-            if window_includes_center(start, size, center) and "".join(cells[start : start + size]) in patterns:
+def exact_five_exists(board, x, y, dx, dy, color, board_size=15, required=()):
+    required = set(required)
+    positions = line_positions(x, y, dx, dy, board_size)
+    values = [board.get(key(px, py), ".") for px, py in positions]
+    for start in range(0, len(values) - 4):
+        window = values[start : start + 5]
+        if window != [color, color, color, color, color]:
+            continue
+        before = values[start - 1] if start > 0 else "."
+        after = values[start + 5] if start + 5 < len(values) else "."
+        if before == color or after == color:
+            continue
+        window_positions = set(positions[start : start + 5])
+        if required.issubset(window_positions):
+            return True
+    return False
+
+
+def winning_extensions_in_direction(board, x, y, dx, dy, color, board_size=15, required=()):
+    required = set(required) | {(x, y)}
+    wins = []
+    for px, py in line_positions(x, y, dx, dy, board_size):
+        if board.get(key(px, py)) is not None:
+            continue
+        test_board = {**board, key(px, py): color}
+        if exact_five_exists(test_board, x, y, dx, dy, color, board_size, required=required | {(px, py)}):
+            wins.append((px, py))
+    return wins
+
+
+def direction_has_four(board, x, y, dx, dy, color, board_size=15):
+    return bool(winning_extensions_in_direction(board, x, y, dx, dy, color, board_size))
+
+
+def pattern_open_three_exists(board, x, y, dx, dy, color, board_size=15):
+    patterns = (
+        (".", color, color, color, "."),
+        (".", color, color, ".", color, "."),
+        (".", color, ".", color, color, "."),
+        (".", color, ".", color, ".", color, "."),
+    )
+    positions = line_positions(x, y, dx, dy, board_size)
+    values = [board.get(key(px, py), ".") for px, py in positions]
+    for pattern in patterns:
+        size = len(pattern)
+        for start in range(0, len(values) - size + 1):
+            if tuple(values[start : start + size]) != pattern:
+                continue
+            if (x, y) in set(positions[start : start + size]):
                 return True
     return False
 
 
-def normalize(cells, color):
-    if color == "black":
-        return cells
-    return ["W" if cell == "B" else "B" if cell == "W" else cell for cell in cells]
+def direction_has_open_three(board, x, y, dx, dy, color, board_size=15):
+    if pattern_open_three_exists(board, x, y, dx, dy, color, board_size):
+        return True
+    for px, py in line_positions(x, y, dx, dy, board_size):
+        if board.get(key(px, py)) is not None:
+            continue
+        test_board = {**board, key(px, py): color}
+        if open_four_exists(test_board, x, y, dx, dy, color, board_size, required=((x, y), (px, py))):
+            return True
+        if len(winning_extensions_in_direction(test_board, x, y, dx, dy, color, board_size, required=((x, y), (px, py)))) >= 2:
+            return True
+    return False
 
 
 def validate_move(stones, x, y, color, rule_set="standard", board_size=15):
@@ -106,10 +175,8 @@ def validate_move(stones, x, y, color, rule_set="standard", board_size=15):
     four_count = 0
     three_count = 0
     for dx, dy in DIRECTIONS:
-        cells, center = line_cells(next_board, x, y, dx, dy, board_size)
-        cells = normalize(cells, color)
-        four_count += int(has_four_threat(cells, center))
-        three_count += int(has_open_three(cells, center))
+        four_count += int(direction_has_four(next_board, x, y, dx, dy, color, board_size))
+        three_count += int(direction_has_open_three(next_board, x, y, dx, dy, color, board_size))
     if four_count >= 2:
         return RuleResult(True, "黑棋双四禁手，白棋获胜", status="white_win", winner="white", forbidden=True)
     if three_count >= 2:

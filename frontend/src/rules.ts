@@ -34,39 +34,119 @@ function count(board: Map<string, StoneColor>, x: number, y: number, dx: number,
   return total;
 }
 
-function lineCells(board: Map<string, StoneColor>, x: number, y: number, dx: number, dy: number, size: number) {
-  const cells: string[] = [];
-  for (let offset = -5; offset <= 5; offset += 1) {
-    const cx = x + dx * offset;
-    const cy = y + dy * offset;
-    const value = board.get(key(cx, cy));
-    if (!inside(cx, cy, size)) cells.push("X");
-    else if (!value) cells.push(".");
-    else cells.push(value === "black" ? "B" : "W");
+function linePositions(x: number, y: number, dx: number, dy: number, size: number) {
+  let sx = x;
+  let sy = y;
+  while (inside(sx - dx, sy - dy, size)) {
+    sx -= dx;
+    sy -= dy;
   }
-  return cells;
+  const positions: Array<[number, number]> = [];
+  while (inside(sx, sy, size)) {
+    positions.push([sx, sy]);
+    sx += dx;
+    sy += dy;
+  }
+  return positions;
 }
 
-function windowIncludesCenter(start: number, length: number) {
-  return start <= 5 && 5 < start + length;
+function hasAll(required: Array<[number, number]>, window: Set<string>) {
+  return required.every(([x, y]) => window.has(key(x, y)));
 }
 
-function hasFour(cells: string[]) {
-  for (let i = 0; i <= cells.length - 5; i += 1) {
-    if (!windowIncludesCenter(i, 5)) continue;
-    const w = cells.slice(i, i + 5);
-    if (w.filter((c) => c === "B").length === 4 && w.includes(".")) return true;
+function openFourExists(
+  board: Map<string, StoneColor>,
+  x: number,
+  y: number,
+  dx: number,
+  dy: number,
+  color: StoneColor,
+  size: number,
+  required: Array<[number, number]>,
+) {
+  const positions = linePositions(x, y, dx, dy, size);
+  const values = positions.map(([px, py]) => board.get(key(px, py)) || ".");
+  for (let i = 0; i <= values.length - 6; i += 1) {
+    const window = values.slice(i, i + 6);
+    if (window.join("") !== `.${color}${color}${color}${color}.`) continue;
+    if (hasAll(required, new Set(positions.slice(i, i + 6).map(([px, py]) => key(px, py))))) return true;
   }
   return false;
 }
 
-function hasThree(cells: string[]) {
-  const patterns = new Set([".BBB.", ".BB.B.", ".B.BB.", ".B.B.B."]);
-  const sizes = new Set(Array.from(patterns).map((pattern) => pattern.length));
-  for (const size of sizes) {
-    for (let i = 0; i <= cells.length - size; i += 1) {
-      if (i <= 5 && 5 < i + size && patterns.has(cells.slice(i, i + size).join(""))) return true;
+function exactFiveExists(
+  board: Map<string, StoneColor>,
+  x: number,
+  y: number,
+  dx: number,
+  dy: number,
+  color: StoneColor,
+  size: number,
+  required: Array<[number, number]>,
+) {
+  const positions = linePositions(x, y, dx, dy, size);
+  const values = positions.map(([px, py]) => board.get(key(px, py)) || ".");
+  const five = `${color}${color}${color}${color}${color}`;
+  for (let i = 0; i <= values.length - 5; i += 1) {
+    if (values.slice(i, i + 5).join("") !== five) continue;
+    if (values[i - 1] === color || values[i + 5] === color) continue;
+    if (hasAll(required, new Set(positions.slice(i, i + 5).map(([px, py]) => key(px, py))))) return true;
+  }
+  return false;
+}
+
+function winningExtensionsInDirection(
+  board: Map<string, StoneColor>,
+  x: number,
+  y: number,
+  dx: number,
+  dy: number,
+  color: StoneColor,
+  size: number,
+  required: Array<[number, number]> = [],
+) {
+  const wins: Array<[number, number]> = [];
+  const baseRequired: Array<[number, number]> = [[x, y], ...required];
+  for (const [px, py] of linePositions(x, y, dx, dy, size)) {
+    if (board.has(key(px, py))) continue;
+    const next = new Map(board);
+    next.set(key(px, py), color);
+    if (exactFiveExists(next, x, y, dx, dy, color, size, [...baseRequired, [px, py]])) wins.push([px, py]);
+  }
+  return wins;
+}
+
+function directionHasFour(board: Map<string, StoneColor>, x: number, y: number, dx: number, dy: number, color: StoneColor, size: number) {
+  return winningExtensionsInDirection(board, x, y, dx, dy, color, size).length > 0;
+}
+
+function patternOpenThreeExists(board: Map<string, StoneColor>, x: number, y: number, dx: number, dy: number, color: StoneColor, size: number) {
+  const patterns = [
+    [".", color, color, color, "."],
+    [".", color, color, ".", color, "."],
+    [".", color, ".", color, color, "."],
+    [".", color, ".", color, ".", color, "."],
+  ];
+  const positions = linePositions(x, y, dx, dy, size);
+  const values = positions.map(([px, py]) => board.get(key(px, py)) || ".");
+  for (const pattern of patterns) {
+    for (let i = 0; i <= values.length - pattern.length; i += 1) {
+      if (values.slice(i, i + pattern.length).every((value, index) => value === pattern[index])) {
+        if (positions.slice(i, i + pattern.length).some(([px, py]) => px === x && py === y)) return true;
+      }
     }
+  }
+  return false;
+}
+
+function directionHasOpenThree(board: Map<string, StoneColor>, x: number, y: number, dx: number, dy: number, color: StoneColor, size: number) {
+  if (patternOpenThreeExists(board, x, y, dx, dy, color, size)) return true;
+  for (const [px, py] of linePositions(x, y, dx, dy, size)) {
+    if (board.has(key(px, py))) continue;
+    const next = new Map(board);
+    next.set(key(px, py), color);
+    if (openFourExists(next, x, y, dx, dy, color, size, [[x, y], [px, py]])) return true;
+    if (winningExtensionsInDirection(next, x, y, dx, dy, color, size, [[px, py]]).length >= 2) return true;
   }
   return false;
 }
@@ -91,9 +171,8 @@ export function validateMove(stones: Move[], x: number, y: number, color: StoneC
   let fours = 0;
   let threes = 0;
   for (const [dx, dy] of directions) {
-    const cells = lineCells(nextBoard, x, y, dx, dy, size);
-    fours += hasFour(cells) ? 1 : 0;
-    threes += hasThree(cells) ? 1 : 0;
+    fours += directionHasFour(nextBoard, x, y, dx, dy, color, size) ? 1 : 0;
+    threes += directionHasOpenThree(nextBoard, x, y, dx, dy, color, size) ? 1 : 0;
   }
   if (fours >= 2) return { ok: true, reason: "黑棋双四禁手，白棋获胜", status: "white_win", winner: "white", forbidden: true };
   if (threes >= 2) return { ok: true, reason: "黑棋双三禁手，白棋获胜", status: "white_win", winner: "white", forbidden: true };

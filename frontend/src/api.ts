@@ -7,6 +7,7 @@ import type {
   MatchReplay,
   Move,
   OnlineUser,
+  PublicUserProfile,
   Room,
   RoomInvitation,
   RoomState,
@@ -91,14 +92,17 @@ export const api = {
   async onlineUsers() {
     return request<{ users: OnlineUser[] }>("/online/");
   },
+  async playerDetail(id: number) {
+    return request<{ user: PublicUserProfile }>(`/users/${id}/`);
+  },
   async roomCount() {
     return request<{ count: number }>("/rooms/count/");
   },
   async leaderboard() {
     return request<{ entries: LeaderboardEntry[] }>("/leaderboard/");
   },
-  async matchHistory() {
-    return request<{ records: MatchRecord[] }>("/profile/matches/");
+  async matchHistory(page = 1) {
+    return request<{ records: MatchRecord[]; page: number; page_size: number; total: number; total_pages: number }>(`/profile/matches/?page=${page}`);
   },
   async matchReplay(id: number) {
     return request<MatchReplay>(`/profile/matches/${id}/`);
@@ -117,6 +121,9 @@ export const api = {
   },
   async createRoom(payload: { name: string; rule_set: RuleSet; has_password: boolean; password?: string; move_time_seconds: number; total_time_seconds: number }) {
     return request<Room>("/rooms/", { method: "POST", body: JSON.stringify(payload) });
+  },
+  async updateRoomSettings(id: number, payload: { name: string; rule_set: RuleSet; has_password: boolean; password?: string; move_time_seconds: number; total_time_seconds: number }) {
+    return request<Room>(`/rooms/${id}/settings/`, { method: "PATCH", body: JSON.stringify(payload) });
   },
   async joinRoom(id: number, password = "") {
     return request<Room>(`/rooms/${id}/join/`, { method: "POST", body: JSON.stringify({ password }) });

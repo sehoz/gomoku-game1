@@ -1,16 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { Check, LogOut, MessageSquareText, Send, Undo2, X } from "lucide-vue-next";
+import { Check, MessageSquareText, Send, Settings2, Undo2, X } from "lucide-vue-next";
 import { api, roomSocketUrl } from "../api";
 import Avatar from "../components/Avatar.vue";
 import GameBoard from "../components/GameBoard.vue";
 import Modal from "../components/Modal.vue";
+import PlayerDetailModal from "../components/PlayerDetailModal.vue";
 import { authState, isAuthenticated } from "../stores/auth";
 import { presenceState } from "../stores/presence";
 import { playChatSound, playStoneSound } from "../stores/settings";
 import { nextTurn } from "../rules";
-import type { ChatMessage, Move, Room, RoomState, SeatSwitchRequest, StoneColor, UndoRequest } from "../types";
+import type { ChatMessage, Move, Room, RoomState, RuleSet, SeatSwitchRequest, StoneColor, UndoRequest } from "../types";
 
 const route = useRoute();
 const router = useRouter();
@@ -28,6 +29,17 @@ const pendingOptimisticMoves = ref<Move[]>([]);
 const sentInviteLabels = ref<Record<number, string>>({});
 const socketConnected = ref(false);
 const nowTick = ref(Date.now());
+const selectedPlayerId = ref<number | null>(null);
+const roomSettingsOpen = ref(false);
+const roomSettingsError = ref("");
+const roomSettingsForm = ref({
+  name: "",
+  rule_set: "standard" as RuleSet,
+  has_password: false,
+  password: "",
+  move_time_seconds: 30,
+  total_time_minutes: 10,
+});
 let socket: WebSocket | null = null;
 let heartbeatTimer: number | null = null;
 let statePollTimer: number | null = null;
@@ -100,15 +112,25 @@ const blackTimeLeft = computed(() => timeLeftFor("black"));
 const whiteTimeLeft = computed(() => timeLeftFor("white"));
 const stepTimeLeft = computed(() => {
   const game = currentGame.value;
-  if (!game || !activeGame.value || !game.turn_started_at) return room.value?.move_time_seconds ?? 0;
+  if (!game || !activeGame.value || !game.turn_started_at) {
+    const limit = room.value?.move_time_seconds ?? 0;
+    return limit > 0 ? limit : -1;
+  }
   const elapsed = Math.floor((nowTick.value - new Date(game.turn_started_at).getTime()) / 1000);
   const totalRemaining = turn.value === "black" ? game.black_time_left_seconds : game.white_time_left_seconds;
-  return Math.max(0, Math.min(game.move_time_seconds, totalRemaining) - elapsed);
+  const moveLeft = game.move_time_seconds > 0 ? game.move_time_seconds - elapsed : Number.POSITIVE_INFINITY;
+  const totalLeft = game.total_time_seconds > 0 ? totalRemaining - elapsed : Number.POSITIVE_INFINITY;
+  const value = Math.min(moveLeft, totalLeft);
+  return Number.isFinite(value) ? Math.max(0, value) : -1;
 });
 
 function timeLeftFor(color: StoneColor) {
   const game = currentGame.value;
-  if (!game) return room.value?.total_time_seconds ?? 0;
+  if (!game) {
+    const limit = room.value?.total_time_seconds ?? 0;
+    return limit > 0 ? limit : -1;
+  }
+  if (game.total_time_seconds <= 0) return -1;
   let remaining = color === "black" ? game.black_time_left_seconds : game.white_time_left_seconds;
   if (activeGame.value && game.turn_started_at && turn.value === color) {
     remaining -= Math.floor((nowTick.value - new Date(game.turn_started_at).getTime()) / 1000);
@@ -117,10 +139,49 @@ function timeLeftFor(color: StoneColor) {
 }
 
 function formatSeconds(seconds: number) {
+  if (seconds < 0) return "不限";
   const value = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(value / 60);
   const rest = value % 60;
   return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
+function openPlayerDetail(id?: number | null) {
+  if (id) selectedPlayerId.value = id;
+}
+
+function openRoomSettings() {
+  if (!room.value) return;
+  roomSettingsForm.value = {
+    name: room.value.name,
+    rule_set: room.value.rule_set,
+    has_password: room.value.has_password,
+    password: "",
+    move_time_seconds: room.value.move_time_seconds,
+    total_time_minutes: room.value.total_time_seconds > 0 ? Math.round(room.value.total_time_seconds / 60) : 0,
+  };
+  roomSettingsError.value = "";
+  roomSettingsOpen.value = true;
+}
+
+async function submitRoomSettings() {
+  roomSettingsError.value = "";
+  try {
+    const updated = await api.updateRoomSettings(roomId, {
+      name: roomSettingsForm.value.name.trim(),
+      rule_set: roomSettingsForm.value.rule_set,
+      has_password: roomSettingsForm.value.has_password,
+      password: roomSettingsForm.value.password,
+      move_time_seconds: Number(roomSettingsForm.value.move_time_seconds),
+      total_time_seconds: Number(roomSettingsForm.value.total_time_minutes) * 60,
+    });
+    room.value = updated;
+    roomSettingsOpen.value = false;
+    notice.value = "房间参数已更新。";
+    await loadState(false);
+  } catch (err) {
+    roomSettingsError.value = errorMessage(err, "房间参数更新失败");
+  }
 }
 
 function playerNameChanged(before: Room | null, after: Room, color: StoneColor) {
@@ -548,7 +609,7 @@ onUnmounted(() => {
 
 <template>
   <main class="page-shell">
-    <header class="page-header"><div><button class="link-button" type="button" @click="leave">‹ 返回房间</button><h1>{{ room?.name || "房间" }}</h1><p>黑棋在上，白棋在下；两名玩家都准备后开始。</p></div><div class="header-actions"><button class="secondary-button" type="button" @click="leave"><LogOut :size="18" />离开房间</button></div></header>
+    <header class="page-header"><div><button class="link-button" type="button" @click="leave">‹ 返回大厅</button><h1>{{ room?.name || "房间" }}</h1><p>黑棋在上，白棋在下；两名玩家都准备后开始。</p></div></header>
     <section class="game-layout">
       <div class="board-panel">
         <div class="board-controlbar">
@@ -575,14 +636,17 @@ onUnmounted(() => {
         <GameBoard :stones="moves" :interactive="canMove" @play="play" />
       </div>
       <aside class="settings-panel">
-        <h2>玩家</h2>
+        <div class="section-title-row">
+          <div><h2>玩家</h2><p>{{ isHost ? "房主可以调整房间参数。" : "查看席位、准备状态和用时。" }}</p></div>
+          <button v-if="isHost" class="icon-button" type="button" title="房间设置" @click="openRoomSettings"><Settings2 :size="18" /></button>
+        </div>
         <div class="seat-list">
           <div class="seat-row">
-            <div class="seat-player"><Avatar :username="room?.black_player_name || '等待'" :avatar-url="room?.black_player_avatar_url" /><div><strong>{{ room?.black_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-black">黑棋</span><span v-if="room?.host === room?.black_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.black_ready ? 'ready' : 'waiting']">{{ room?.black_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(blackTimeLeft) }}</span></span></div></div>
+            <div class="seat-player"><button v-if="room?.black_player" class="avatar-button" type="button" title="查看玩家信息" @click="openPlayerDetail(room.black_player)"><Avatar :username="room?.black_player_name || '等待'" :avatar-url="room?.black_player_avatar_url" /></button><Avatar v-else :username="room?.black_player_name || '等待'" :avatar-url="room?.black_player_avatar_url" /><div><strong>{{ room?.black_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-black">黑棋</span><span v-if="room?.host === room?.black_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.black_ready ? 'ready' : 'waiting']">{{ room?.black_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(blackTimeLeft) }}</span></span></div></div>
             <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo('black')" @click="switchPosition('black')">{{ seatButtonLabel('black', Boolean(room?.black_player)) }}</button><button v-if="isHost && room?.black_player && room.black_player !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(room.black_player)">踢出</button></div>
           </div>
           <div class="seat-row">
-            <div class="seat-player"><Avatar :username="room?.white_player_name || '等待'" :avatar-url="room?.white_player_avatar_url" /><div><strong>{{ room?.white_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-white">白棋</span><span v-if="room?.host === room?.white_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.white_ready ? 'ready' : 'waiting']">{{ room?.white_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(whiteTimeLeft) }}</span></span></div></div>
+            <div class="seat-player"><button v-if="room?.white_player" class="avatar-button" type="button" title="查看玩家信息" @click="openPlayerDetail(room.white_player)"><Avatar :username="room?.white_player_name || '等待'" :avatar-url="room?.white_player_avatar_url" /></button><Avatar v-else :username="room?.white_player_name || '等待'" :avatar-url="room?.white_player_avatar_url" /><div><strong>{{ room?.white_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-white">白棋</span><span v-if="room?.host === room?.white_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.white_ready ? 'ready' : 'waiting']">{{ room?.white_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(whiteTimeLeft) }}</span></span></div></div>
             <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo('white')" @click="switchPosition('white')">{{ seatButtonLabel('white', Boolean(room?.white_player)) }}</button><button v-if="isHost && room?.white_player && room.white_player !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(room.white_player)">踢出</button></div>
           </div>
         </div>
@@ -590,7 +654,7 @@ onUnmounted(() => {
           <h2>观战席</h2>
           <div class="spectator-list">
             <div v-for="slot in spectatorSlots" :key="slot.seatNumber" class="spectator-row">
-              <div class="spectator-main"><Avatar :username="slot.user?.username || '空位'" :avatar-url="slot.user?.avatar_url" /><span class="seat-badge">观众{{ slot.seatNumber }}</span><strong>{{ slot.user?.username || "空位" }}</strong><span v-if="slot.user && room?.host === slot.user.user" class="seat-inline-label">房主</span></div>
+              <div class="spectator-main"><button v-if="slot.user" class="avatar-button" type="button" title="查看玩家信息" @click="openPlayerDetail(slot.user.user)"><Avatar :username="slot.user.username" :avatar-url="slot.user.avatar_url" /></button><Avatar v-else username="空位" avatar-url="" /><span class="seat-badge">观众{{ slot.seatNumber }}</span><strong>{{ slot.user?.username || "空位" }}</strong><span v-if="slot.user && room?.host === slot.user.user" class="seat-inline-label">房主</span></div>
               <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo(`spectator${slot.seatNumber}`)" @click="switchPosition(`spectator${slot.seatNumber}`)">{{ seatButtonLabel(`spectator${slot.seatNumber}`, Boolean(slot.user)) }}</button><button v-if="isHost && slot.user && slot.user.user !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(slot.user.user)">踢出</button></div>
             </div>
           </div>
@@ -629,5 +693,19 @@ onUnmounted(() => {
         </div>
       </div>
     </Modal>
+    <Modal v-if="roomSettingsOpen" title="房间设置" @close="roomSettingsOpen = false">
+      <form class="modal-form" @submit.prevent="submitRoomSettings">
+        <p v-if="roomSettingsError" class="form-error">{{ roomSettingsError }}</p>
+        <label>房间名<input v-model="roomSettingsForm.name" /></label>
+        <label>规则<select v-model="roomSettingsForm.rule_set"><option value="standard">无禁手</option><option value="renju">有禁手</option></select></label>
+        <div class="form-subtitle">计时设置</div>
+        <label>每步限时<select v-model.number="roomSettingsForm.move_time_seconds"><option :value="0">不限</option><option :value="15">15 秒</option><option :value="30">30 秒</option><option :value="60">60 秒</option><option :value="120">120 秒</option></select></label>
+        <label>每方局时<select v-model.number="roomSettingsForm.total_time_minutes"><option :value="0">不限</option><option :value="5">5 分钟</option><option :value="10">10 分钟</option><option :value="15">15 分钟</option><option :value="30">30 分钟</option></select></label>
+        <label class="checkbox-row"><input v-model="roomSettingsForm.has_password" type="checkbox" />设置房间口令</label>
+        <label v-if="roomSettingsForm.has_password">新房间口令<input v-model="roomSettingsForm.password" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text" name="room-settings-code" type="text" placeholder="留空则保留原口令" /></label>
+        <button class="primary-button" type="submit">保存设置</button>
+      </form>
+    </Modal>
+    <PlayerDetailModal v-if="selectedPlayerId" :user-id="selectedPlayerId" @close="selectedPlayerId = null" />
   </main>
 </template>

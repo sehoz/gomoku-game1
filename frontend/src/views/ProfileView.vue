@@ -12,6 +12,9 @@ import type { MatchRecord, MatchReplay } from "../types";
 const authOpen = ref(false);
 const records = ref<MatchRecord[]>([]);
 const historyError = ref("");
+const historyPage = ref(1);
+const historyTotalPages = ref(1);
+const historyTotal = ref(0);
 const replay = ref<MatchReplay | null>(null);
 const replayStep = ref(0);
 const replayError = ref("");
@@ -38,16 +41,24 @@ function formatTime(value: string | null) {
   return new Date(value).toLocaleString();
 }
 
-async function loadHistory() {
+async function loadHistory(page = historyPage.value) {
   if (!isAuthenticated()) return;
   profileForm.value.username = authState.user?.username || "";
   avatarPreview.value = authState.user?.avatar_url || "";
   try {
-    const data = await api.matchHistory();
+    const data = await api.matchHistory(page);
     records.value = data.records;
+    historyPage.value = data.page;
+    historyTotalPages.value = data.total_pages;
+    historyTotal.value = data.total;
   } catch (err) {
     historyError.value = err instanceof Error ? err.message : "对局记录加载失败";
   }
+}
+
+function changeHistoryPage(nextPage: number) {
+  if (nextPage < 1 || nextPage > historyTotalPages.value) return;
+  void loadHistory(nextPage);
 }
 
 function readAvatar(event: Event) {
@@ -121,7 +132,8 @@ watch(
   () => {
     profileForm.value.username = authState.user?.username || "";
     avatarPreview.value = authState.user?.avatar_url || "";
-    void loadHistory();
+    historyPage.value = 1;
+    void loadHistory(1);
   },
 );
 </script>
@@ -171,6 +183,11 @@ watch(
             <div><span>开始：{{ formatTime(record.started_at) }}</span><span>结束：{{ formatTime(record.ended_at) }}</span></div>
             <div class="inline-actions"><span :class="['result-badge', record.result]">{{ resultLabel(record) }}</span><button class="secondary-button" type="button" @click="openReplay(record)">查看棋谱</button></div>
           </article>
+          <div class="pagination-row">
+            <button class="secondary-button" type="button" :disabled="historyPage <= 1" @click="changeHistoryPage(historyPage - 1)"><ChevronLeft :size="16" />上一页</button>
+            <span>第 {{ historyPage }} / {{ historyTotalPages }} 页，共 {{ historyTotal }} 局</span>
+            <button class="secondary-button" type="button" :disabled="historyPage >= historyTotalPages" @click="changeHistoryPage(historyPage + 1)">下一页<ChevronRight :size="16" /></button>
+          </div>
         </div>
       </section>
     </section>

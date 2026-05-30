@@ -51,6 +51,14 @@ function timeAgo(value: string) {
   return `${Math.floor(hours / 24)} 天前`;
 }
 
+function formatMoveTime(seconds: number) {
+  return seconds === 0 ? "不限" : `${seconds} 秒`;
+}
+
+function formatTotalTime(seconds: number) {
+  return seconds === 0 ? "不限" : `${Math.round(seconds / 60)} 分钟`;
+}
+
 async function enter(room: Room) {
   error.value = "";
   if (room.has_password) {
@@ -140,8 +148,8 @@ onUnmounted(() => {
           <div class="room-main"><span class="room-icon"><UsersRound :size="20" /></span><div><h2>{{ room.name }}</h2><p>{{ timeAgo(room.created_at) }}</p></div></div>
           <div class="room-meta">
             <span class="tag">{{ room.rule_set === "renju" ? "有禁手" : "无禁手" }}</span>
-            <span class="tag">步时 {{ room.move_time_seconds }} 秒</span>
-            <span class="tag">局时 {{ Math.round(room.total_time_seconds / 60) }} 分钟</span>
+            <span class="tag">步时 {{ formatMoveTime(room.move_time_seconds) }}</span>
+            <span class="tag">局时 {{ formatTotalTime(room.total_time_seconds) }}</span>
             <span class="tag"><Lock v-if="room.has_password" :size="14" /><Unlock v-else :size="14" />{{ room.has_password ? "需密码" : "无密码" }}</span>
             <span class="tag">玩家 {{ room.players }}/{{ room.max_players }}</span>
             <span class="tag">观众 {{ room.spectators_count }}/{{ room.max_spectators }}</span>
@@ -157,8 +165,8 @@ onUnmounted(() => {
         <label>房间名<input v-model="form.name" /></label>
         <label>规则<select v-model="form.rule_set"><option value="standard">无禁手</option><option value="renju">有禁手</option></select></label>
         <div class="form-subtitle">计时设置</div>
-        <label>每步限时<select v-model.number="form.move_time_seconds"><option :value="15">15 秒</option><option :value="30">30 秒</option><option :value="60">60 秒</option><option :value="120">120 秒</option></select></label>
-        <label>每方局时<select v-model.number="form.total_time_minutes"><option :value="5">5 分钟</option><option :value="10">10 分钟</option><option :value="15">15 分钟</option><option :value="30">30 分钟</option></select></label>
+        <label>每步限时<select v-model.number="form.move_time_seconds"><option :value="0">不限</option><option :value="15">15 秒</option><option :value="30">30 秒</option><option :value="60">60 秒</option><option :value="120">120 秒</option></select></label>
+        <label>每方局时<select v-model.number="form.total_time_minutes"><option :value="0">不限</option><option :value="5">5 分钟</option><option :value="10">10 分钟</option><option :value="15">15 分钟</option><option :value="30">30 分钟</option></select></label>
         <label class="checkbox-row"><input v-model="form.has_password" type="checkbox" />设置房间口令</label>
         <label v-if="form.has_password">房间口令<input v-model="form.password" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="text" name="room-create-code" type="text" /></label>
         <button class="primary-button" type="submit">创建并进入</button>

@@ -339,6 +339,8 @@ def turn_elapsed_seconds(game, now=None):
 
 def displayed_time_left(game, color, now=None):
     remaining = getattr(game, time_left_field(color))
+    if remaining <= 0:
+        return 0
     if game.status == GameSession.STATUS_PLAYING and current_turn_color(game) == color:
         remaining -= int(turn_elapsed_seconds(game, now))
     return max(0, remaining)
@@ -352,7 +354,7 @@ def finish_if_turn_timed_out(room):
     color = current_turn_color(game)
     elapsed = turn_elapsed_seconds(game, now)
     remaining = getattr(game, time_left_field(color))
-    if elapsed >= game.move_time_seconds or elapsed >= remaining:
+    if (game.move_time_seconds > 0 and elapsed >= game.move_time_seconds) or (remaining > 0 and elapsed >= remaining):
         return finish_game(room, opponent_color(color), "time"), True
     return room, False
 
@@ -673,10 +675,10 @@ def make_move(room, user, x, y):
 
     now = timezone.now()
     elapsed = turn_elapsed_seconds(game, now)
-    if elapsed >= game.move_time_seconds:
+    if game.move_time_seconds > 0 and elapsed >= game.move_time_seconds:
         finish_game(room, opponent_color(color), "time")
         return room, RuleResult(True, "本步落子超时，对局已结束", status=f"{opponent_color(color)}_win", winner=opponent_color(color))
-    if elapsed >= getattr(game, time_left_field(color)):
+    if getattr(game, time_left_field(color)) > 0 and elapsed >= getattr(game, time_left_field(color)):
         finish_game(room, opponent_color(color), "time")
         return room, RuleResult(True, "总用时耗尽，对局已结束", status=f"{opponent_color(color)}_win", winner=opponent_color(color))
 
@@ -690,7 +692,8 @@ def make_move(room, user, x, y):
         color=color,
     )
     remaining_field = time_left_field(color)
-    setattr(game, remaining_field, max(0, int(getattr(game, remaining_field) - elapsed)))
+    if getattr(game, remaining_field) > 0:
+        setattr(game, remaining_field, max(0, int(getattr(game, remaining_field) - elapsed)))
     game.turn_started_at = now
     game.save(update_fields=[remaining_field, "turn_started_at"])
     if result.winner:

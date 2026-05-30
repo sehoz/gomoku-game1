@@ -25,6 +25,7 @@ from .serializers import (
     LeaderboardEntrySerializer,
     LoginSerializer,
     MatchRecordSerializer,
+    PublicUserSerializer,
     RegisterSerializer,
     RoomInvitationSerializer,
     RoomSerializer,
@@ -190,16 +191,23 @@ def change_password(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def match_history(request):
+    try:
+        page = max(1, int(request.query_params.get("page", 1)))
+    except (TypeError, ValueError):
+        page = 1
+    page_size = 10
     queryset = (
         GameSession.objects.filter(status=GameSession.STATUS_FINISHED, moves__isnull=False)
         .filter(Q(black_player=request.user) | Q(white_player=request.user))
         .select_related("room", "black_player", "white_player")
         .prefetch_related("moves")
         .distinct()
-        .order_by("-ended_at", "-started_at")[:20]
+        .order_by("-ended_at", "-started_at")
     )
+    total = queryset.count()
+    offset = (page - 1) * page_size
     records = []
-    for game in queryset:
+    for game in queryset[offset : offset + page_size]:
         color = "black" if game.black_player_id == request.user.id else "white"
         opponent = game.white_player if color == "black" else game.black_player
         if game.winner == color:
@@ -227,7 +235,25 @@ def match_history(request):
                 "moves_count": game.moves.count(),
             }
         )
-    return Response({"records": MatchRecordSerializer(records, many=True).data})
+    return Response(
+        {
+            "records": MatchRecordSerializer(records, many=True).data,
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": max(1, (total + page_size - 1) // page_size),
+        }
+    )
+
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def player_detail(request, user_id):
+    try:
+        user = User.objects.get(id=user_id, is_active=True)
+    except User.DoesNotExist:
+        return Response({"detail": "用户不存在"}, status=status.HTTP_404_NOT_FOUND)
+    return Response({"user": PublicUserSerializer(user).data})
 
 
 @api_view(["GET"])
@@ -426,6 +452,19 @@ def active_rooms_queryset():
     )
 
 
+def parse_room_timing(data):
+    try:
+        move_time_seconds = int(data.get("move_time_seconds", 30))
+        total_time_seconds = int(data.get("total_time_seconds", 600))
+    except (TypeError, ValueError):
+        raise ValueError("计时参数无效")
+    if move_time_seconds != 0 and not 10 <= move_time_seconds <= 300:
+        raise ValueError("步时需要设置在 10 到 300 秒之间，或设为不限")
+    if total_time_seconds != 0 and not 60 <= total_time_seconds <= 7200:
+        raise ValueError("局时需要设置在 1 到 120 分钟之间，或设为不限")
+    return move_time_seconds, total_time_seconds
+
+
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def room_count(request):
@@ -458,9 +497,9 @@ def rooms(request):
         total_time_seconds = int(request.data.get("total_time_seconds", 600))
     except (TypeError, ValueError):
         return Response({"detail": "计时参数无效"}, status=status.HTTP_400_BAD_REQUEST)
-    if not 10 <= move_time_seconds <= 300:
+    if move_time_seconds != 0 and not 10 <= move_time_seconds <= 300:
         return Response({"detail": "步时需要设置在 10 到 300 秒之间"}, status=status.HTTP_400_BAD_REQUEST)
-    if not 60 <= total_time_seconds <= 7200:
+    if total_time_seconds != 0 and not 60 <= total_time_seconds <= 7200:
         return Response({"detail": "局时需要设置在 1 到 120 分钟之间"}, status=status.HTTP_400_BAD_REQUEST)
     room = Room(
         name=name[:80],
@@ -491,6 +530,68 @@ def join_room_view(request, room_id):
     except ValueError as exc:
         broadcast_room_state(room_id)
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["PATCH"])
+@permission_classes([IsAuthenticated])
+def room_settings_view(request, room_id):
+    try:
+        room = Room.objects.select_related("current_game").get(id=room_id)
+    except Room.DoesNotExist:
+        return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
+    ensure_room_host(room)
+    if room.host_id != request.user.id:
+        return Response({"detail": "只有房主可以修改房间参数"}, status=status.HTTP_403_FORBIDDEN)
+
+    name = (request.data.get("name") if "name" in request.data else room.name) or room.name
+    name = name.strip() or room.name
+    if Room.objects.exclude(id=room.id).exclude(status=Room.STATUS_FINISHED).filter(name__iexact=name).exists():
+        return Response({"detail": "房间名重复"}, status=status.HTTP_400_BAD_REQUEST)
+
+    rule_set = request.data.get("rule_set", room.rule_set)
+    if rule_set not in {Room.RULE_STANDARD, Room.RULE_RENJU}:
+        return Response({"detail": "规则参数无效"}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        move_time_seconds, total_time_seconds = parse_room_timing(
+            {
+                "move_time_seconds": request.data.get("move_time_seconds", room.move_time_seconds),
+                "total_time_seconds": request.data.get("total_time_seconds", room.total_time_seconds),
+            }
+        )
+    except ValueError as exc:
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    timing_or_rule_changed = (
+        rule_set != room.rule_set
+        or move_time_seconds != room.move_time_seconds
+        or total_time_seconds != room.total_time_seconds
+    )
+    if timing_or_rule_changed and room.current_game and room.current_game.status == GameSession.STATUS_PLAYING:
+        return Response({"detail": "对局进行中不能修改规则或计时"}, status=status.HTTP_400_BAD_REQUEST)
+
+    room.name = name[:80]
+    room.rule_set = rule_set
+    room.move_time_seconds = move_time_seconds
+    room.total_time_seconds = total_time_seconds
+    if timing_or_rule_changed:
+        room.black_ready = False
+        room.white_ready = False
+    if "has_password" in request.data:
+        has_password = bool(request.data.get("has_password"))
+        password = request.data.get("password", "")
+        if not has_password:
+            room.set_password("")
+        elif password:
+            room.set_password(password)
+        elif not room.has_password:
+            return Response({"detail": "请输入房间密码"}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            room.has_password = True
+    room.last_activity_at = timezone.now()
+    room.refresh_status()
+    room.save()
+    broadcast_room_state(room.id)
+    return Response(RoomSerializer(room).data)
 
 
 @api_view(["POST"])

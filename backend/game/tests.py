@@ -197,6 +197,21 @@ class AiTests(TestCase):
         self.assertTrue(result.forbidden)
         self.assertEqual(result.winner, "white")
 
+    def test_renju_black_diagonal_far_jump_double_three_loses(self):
+        stones = [
+            {"x": 4, "y": 4, "color": "black"},
+            {"x": 6, "y": 6, "color": "black"},
+            {"x": 9, "y": 9, "color": "black"},
+            {"x": 4, "y": 10, "color": "black"},
+            {"x": 6, "y": 8, "color": "black"},
+            {"x": 9, "y": 5, "color": "black"},
+        ]
+        result = evaluate_move(stones, 7, 7, "black", Room.RULE_RENJU)
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.forbidden)
+        self.assertEqual(result.winner, "white")
+
 
 class RoomLifecycleTests(TestCase):
     def playable_room(self, black, white):
@@ -292,6 +307,59 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["move_time_seconds"], 60)
         self.assertEqual(response.data["total_time_seconds"], 900)
+
+    def test_create_room_accepts_unlimited_time_controls(self):
+        owner = User.objects.create_user(username="owner", password="gomoku123")
+        client = APIClient()
+        client.force_authenticate(owner)
+
+        response = client.post(
+            "/api/rooms/",
+            {"name": "不限时房", "rule_set": "standard", "move_time_seconds": 0, "total_time_seconds": 0},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["move_time_seconds"], 0)
+        self.assertEqual(response.data["total_time_seconds"], 0)
+
+    def test_host_can_update_room_settings(self):
+        host = User.objects.create_user(username="host", password="gomoku123")
+        room = Room.objects.create(name="旧房间", black_player=host, host=host)
+        client = APIClient()
+        client.force_authenticate(host)
+
+        response = client.patch(
+            f"/api/rooms/{room.id}/settings/",
+            {
+                "name": "新房间",
+                "rule_set": "renju",
+                "move_time_seconds": 0,
+                "total_time_seconds": 0,
+                "has_password": True,
+                "password": "1",
+            },
+            format="json",
+        )
+
+        room.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["name"], "新房间")
+        self.assertEqual(response.data["rule_set"], "renju")
+        self.assertEqual(response.data["move_time_seconds"], 0)
+        self.assertEqual(response.data["total_time_seconds"], 0)
+        self.assertTrue(room.password_matches("1"))
+
+    def test_non_host_cannot_update_room_settings(self):
+        host = User.objects.create_user(username="host", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = Room.objects.create(name="测试房间", black_player=host, white_player=white, host=host)
+        client = APIClient()
+        client.force_authenticate(white)
+
+        response = client.patch(f"/api/rooms/{room.id}/settings/", {"name": "非法修改"}, format="json")
+
+        self.assertEqual(response.status_code, 403)
 
     def test_create_room_accepts_short_room_password(self):
         owner = User.objects.create_user(username="owner", password="gomoku123")
@@ -533,6 +601,32 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["records"][0]["room_name"], "测试房间")
         self.assertEqual(response.data["records"][0]["result"], "win")
+
+    def test_profile_match_history_is_paginated_by_ten(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        for index in range(12):
+            game = GameSession.objects.create(
+                room_name=f"第{index}局",
+                black_player=black,
+                white_player=white,
+                status=GameSession.STATUS_FINISHED,
+                winner="black",
+                started_at=timezone.now() - timedelta(minutes=20 - index),
+                ended_at=timezone.now() - timedelta(minutes=19 - index),
+            )
+            Move.objects.create(game=game, player=black, move_number=1, x=7, y=7, color="black")
+        client = APIClient()
+        client.force_authenticate(black)
+
+        first = client.get("/api/profile/matches/?page=1")
+        second = client.get("/api/profile/matches/?page=2")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(len(first.data["records"]), 10)
+        self.assertEqual(first.data["total"], 12)
+        self.assertEqual(first.data["total_pages"], 2)
+        self.assertEqual(len(second.data["records"]), 2)
 
     def test_zero_move_ready_session_is_not_logged(self):
         black = User.objects.create_user(username="black", password="gomoku123")

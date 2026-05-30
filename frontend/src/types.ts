@@ -18,6 +18,8 @@ export interface UserProfile {
   };
 }
 
+export type PublicUserProfile = Pick<UserProfile, "id" | "username" | "avatar_url" | "stats">;
+
 export interface Room {
   id: number;
   name: string;
