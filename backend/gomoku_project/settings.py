@@ -106,6 +106,8 @@ CORS_ALLOWED_ORIGINS = [
 ]
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://[a-zA-Z0-9-]+\.netlify\.app$",
+    r"^https://[a-zA-Z0-9.-]+\.tcloudbaseapp\.com$",
+    r"^https://[a-zA-Z0-9.-]+\.app\.tcloudbase\.com$",
 ]
 CORS_ALLOW_CREDENTIALS = True
 
