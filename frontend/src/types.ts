@@ -191,3 +191,17 @@ export interface AdminRoom {
   total_time_seconds: number;
   last_activity_at: string;
 }
+
+export interface AdminMatch {
+  id: number;
+  room_name: string;
+  rule_set: RuleSet;
+  status: "playing" | "finished";
+  winner: string;
+  end_reason: string;
+  black_player_name: string;
+  white_player_name: string;
+  moves_count: number;
+  started_at: string | null;
+  ended_at: string | null;
+}

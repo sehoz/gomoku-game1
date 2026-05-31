@@ -267,6 +267,37 @@ class AdminRoomSerializer(serializers.ModelSerializer):
         )
 
 
+class AdminMatchSerializer(serializers.ModelSerializer):
+    black_player_name = serializers.SerializerMethodField()
+    white_player_name = serializers.SerializerMethodField()
+    moves_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GameSession
+        fields = (
+            "id",
+            "room_name",
+            "rule_set",
+            "status",
+            "winner",
+            "end_reason",
+            "black_player_name",
+            "white_player_name",
+            "moves_count",
+            "started_at",
+            "ended_at",
+        )
+
+    def get_black_player_name(self, game):
+        return game.black_player.username if game.black_player else ""
+
+    def get_white_player_name(self, game):
+        return game.white_player.username if game.white_player else ""
+
+    def get_moves_count(self, game):
+        return game.moves.count()
+
+
 class ChatMessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatMessage

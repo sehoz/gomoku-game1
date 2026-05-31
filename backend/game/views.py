@@ -19,6 +19,7 @@ from .presence import touch_user
 from .rules import evaluate_move
 from .serializers import (
     ChatMessageSerializer,
+    AdminMatchSerializer,
     AdminRoomSerializer,
     AdminUserSerializer,
     GameReplaySerializer,
@@ -90,8 +91,8 @@ def validate_avatar_data_url(value):
         return ""
     if not value.startswith("data:image/"):
         raise ValueError("头像必须是图片文件")
-    if len(value) > 700000:
-        raise ValueError("头像文件过大，请选择较小的图片")
+    if len(value) > 2000000:
+        raise ValueError("头像文件仍然过大，请压缩后重试")
     return value
 
 
@@ -461,6 +462,34 @@ def admin_room_detail(request, room_id):
     room.save()
     broadcast_room_state(room.id)
     return Response({"room": AdminRoomSerializer(room).data})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@admin_required
+def admin_matches(request):
+    games = (
+        GameSession.objects.filter(status=GameSession.STATUS_FINISHED)
+        .select_related("black_player", "white_player")
+        .prefetch_related("moves")
+        .order_by("-ended_at", "-started_at")[:200]
+    )
+    return Response({"matches": AdminMatchSerializer(games, many=True).data})
+
+
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+@admin_required
+def admin_match_detail(request, match_id):
+    try:
+        game = GameSession.objects.get(id=match_id, status=GameSession.STATUS_FINISHED)
+    except GameSession.DoesNotExist:
+        return Response({"detail": "对局记录不存在"}, status=status.HTTP_404_NOT_FOUND)
+    room_id = game.room_id
+    game.delete()
+    if room_id:
+        broadcast_room_state(room_id)
+    return Response({"ok": True})
 
 
 @api_view(["GET"])

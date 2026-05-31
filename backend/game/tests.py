@@ -111,11 +111,32 @@ class AuthEndpointTests(TestCase):
         room = Room.objects.create(name="后台房间")
         rooms_response = client.get("/api/admin/rooms/")
         delete_response = client.delete(f"/api/admin/rooms/{room.id}/")
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        game = GameSession.objects.create(
+            room_name="历史房间",
+            black_player=black,
+            white_player=white,
+            status=GameSession.STATUS_FINISHED,
+            winner="black",
+            ended_at=timezone.now(),
+        )
+        Move.objects.create(game=game, move_number=1, x=7, y=7, color="black")
+        HiddenMatchRecord.objects.create(user=black, game=game)
+        game_id = game.id
+        matches_response = client.get("/api/admin/matches/")
+        delete_match_response = client.delete(f"/api/admin/matches/{game_id}/")
 
         self.assertEqual(create_response.status_code, 201)
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(rooms_response.status_code, 200)
         self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(matches_response.status_code, 200)
+        self.assertEqual(matches_response.data["matches"][0]["id"], game_id)
+        self.assertEqual(delete_match_response.status_code, 200)
+        self.assertFalse(GameSession.objects.filter(id=game_id).exists())
+        self.assertFalse(Move.objects.filter(game_id=game_id).exists())
+        self.assertFalse(HiddenMatchRecord.objects.filter(game_id=game_id).exists())
 
 
 class RuleEngineTests(TestCase):

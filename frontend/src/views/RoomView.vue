@@ -126,14 +126,6 @@ const stepTimeLeft = computed(() => {
   const value = Math.min(moveLeft, totalLeft);
   return Number.isFinite(value) ? Math.max(0, value) : -1;
 });
-const effectiveStepLimit = computed(() => {
-  const game = currentGame.value;
-  const moveLimit = game?.move_time_seconds ?? room.value?.move_time_seconds ?? 0;
-  const totalLimit = game && activeGame.value ? (turn.value === "black" ? blackTimeLeft.value : whiteTimeLeft.value) : room.value?.total_time_seconds ?? 0;
-  if (moveLimit <= 0) return totalLimit > 0 ? totalLimit : -1;
-  if (totalLimit <= 0) return moveLimit;
-  return Math.min(moveLimit, totalLimit);
-});
 const stepTimeWarning = computed(() => activeGame.value && stepTimeLeft.value >= 0 && stepTimeLeft.value <= 10);
 
 function timeLeftFor(color: StoneColor) {
@@ -697,7 +689,7 @@ onUnmounted(() => {
             <span class="status-label">当前回合</span>
             <strong class="stone-status"><span :class="['stone-icon', `stone-icon-${turn}`]" />{{ turnLabel }}</strong>
           </div>
-          <div :class="['control-item', { 'time-warning': stepTimeWarning }]"><span class="status-label">步时</span><strong>{{ formatSeconds(stepTimeLeft) }} / {{ formatSeconds(effectiveStepLimit) }}</strong></div>
+          <div :class="['control-item', { 'time-warning': stepTimeWarning }]"><span class="status-label">步时</span><strong>{{ formatSeconds(stepTimeLeft) }}</strong></div>
           <div class="control-item"><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
           <div class="control-actions">
             <button class="primary-button" :disabled="!canReady" type="button" @click="toggleReady"><Check :size="18" />{{ myReady ? "取消准备" : "准备" }}</button>

@@ -15,6 +15,8 @@ urlpatterns = [
     path("admin/users/<int:user_id>/", views.admin_user_detail),
     path("admin/rooms/", views.admin_rooms),
     path("admin/rooms/<int:room_id>/", views.admin_room_detail),
+    path("admin/matches/", views.admin_matches),
+    path("admin/matches/<int:match_id>/", views.admin_match_detail),
     path("users/<int:user_id>/", views.player_detail),
     path("leaderboard/", views.leaderboard),
     path("invitations/", views.pending_invitations),

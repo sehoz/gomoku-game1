@@ -24,6 +24,7 @@ const profileMessage = ref("");
 const passwordMessage = ref("");
 const avatarPreview = ref("");
 const replayStones = computed(() => replay.value?.moves.slice(0, replayStep.value) || []);
+const avatarTargetLength = 650000;
 
 function resultLabel(record: MatchRecord) {
   if (record.result === "win") return "胜";
@@ -61,7 +62,68 @@ function changeHistoryPage(nextPage: number) {
   void loadHistory(nextPage);
 }
 
-function readAvatar(event: Event) {
+function loadImage(file: File) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    const url = URL.createObjectURL(file);
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("头像图片读取失败"));
+    };
+    image.src = url;
+  });
+}
+
+function canvasToDataUrl(canvas: HTMLCanvasElement, quality: number) {
+  return new Promise<string>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error("头像压缩失败"));
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = () => reject(new Error("头像压缩失败"));
+        reader.readAsDataURL(blob);
+      },
+      "image/jpeg",
+      quality,
+    );
+  });
+}
+
+async function compressAvatar(file: File) {
+  const image = await loadImage(file);
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("当前浏览器无法处理头像图片");
+  const naturalWidth = image.naturalWidth || image.width;
+  const naturalHeight = image.naturalHeight || image.height;
+  let scale = Math.min(1, 768 / Math.max(naturalWidth, naturalHeight));
+  let bestDataUrl = "";
+
+  for (let attempt = 0; attempt < 9; attempt += 1) {
+    canvas.width = Math.max(1, Math.round(naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(naturalHeight * scale));
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const quality = Math.max(0.58, 0.88 - attempt * 0.06);
+    bestDataUrl = await canvasToDataUrl(canvas, quality);
+    if (bestDataUrl.length <= avatarTargetLength) return bestDataUrl;
+    scale *= 0.84;
+  }
+
+  return bestDataUrl;
+}
+
+async function readAvatar(event: Event) {
   const input = event.target as HTMLInputElement | null;
   const file = input?.files?.[0];
   if (!file) return;
@@ -69,15 +131,15 @@ function readAvatar(event: Event) {
     profileMessage.value = "请选择图片文件。";
     return;
   }
-  if (file.size > 512 * 1024) {
-    profileMessage.value = "头像文件不能超过 512KB。";
-    return;
+  profileMessage.value = "正在处理头像...";
+  try {
+    avatarPreview.value = await compressAvatar(file);
+    profileMessage.value = file.size > 512 * 1024 ? "头像已自动压缩，保存后生效。" : "头像已选择，保存后生效。";
+  } catch (err) {
+    profileMessage.value = err instanceof Error ? err.message : "头像处理失败";
+  } finally {
+    if (input) input.value = "";
   }
-  const reader = new FileReader();
-  reader.onload = () => {
-    avatarPreview.value = String(reader.result || "");
-  };
-  reader.readAsDataURL(file);
 }
 
 async function submitProfile() {

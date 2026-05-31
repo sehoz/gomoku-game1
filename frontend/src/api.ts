@@ -1,5 +1,6 @@
 import type {
   AdminRoom,
+  AdminMatch,
   AdminUser,
   AiLevel,
   LeaderboardEntry,
@@ -196,6 +197,12 @@ export const api = {
   },
   async adminDeleteRoom(id: number) {
     return request<{ ok: boolean }>(`/admin/rooms/${id}/`, { method: "DELETE" });
+  },
+  async adminMatches() {
+    return request<{ matches: AdminMatch[] }>("/admin/matches/");
+  },
+  async adminDeleteMatch(id: number) {
+    return request<{ ok: boolean }>(`/admin/matches/${id}/`, { method: "DELETE" });
   },
   async soloAiMove(payload: {
     stones: Move[];
