@@ -23,7 +23,7 @@ const form = ref({
   rule_set: "standard" as RuleSet,
   has_password: false,
   password: "",
-  move_time_seconds: 30,
+  move_time_seconds: 60,
   total_time_minutes: 10,
 });
 let refreshTimer: number | null = null;

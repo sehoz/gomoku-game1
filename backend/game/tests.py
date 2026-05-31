@@ -23,6 +23,7 @@ from .services import (
     set_ready,
     surrender,
     switch_position,
+    transfer_host,
     undo_last_turn,
 )
 
@@ -307,6 +308,17 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data["move_time_seconds"], 60)
         self.assertEqual(response.data["total_time_seconds"], 900)
+
+    def test_create_room_defaults_to_one_minute_step_time(self):
+        owner = User.objects.create_user(username="owner", password="gomoku123")
+        client = APIClient()
+        client.force_authenticate(owner)
+
+        response = client.post("/api/rooms/", {"name": "默认计时房", "rule_set": "standard"}, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["move_time_seconds"], 60)
+        self.assertEqual(response.data["total_time_seconds"], 600)
 
     def test_create_room_accepts_unlimited_time_controls(self):
         owner = User.objects.create_user(username="owner", password="gomoku123")
@@ -716,6 +728,54 @@ class RoomLifecycleTests(TestCase):
         self.assertEqual(game.status, GameSession.STATUS_FINISHED)
         self.assertEqual(game.winner, "black")
         self.assertEqual(game.end_reason, "time")
+
+    def test_total_time_smaller_than_step_time_limits_turn(self):
+        black = User.objects.create_user(username="black", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = Room.objects.create(
+            name="局时优先房",
+            black_player=black,
+            white_player=white,
+            move_time_seconds=60,
+            total_time_seconds=10,
+        )
+        set_ready(room, black, True)
+        set_ready(room, white, True)
+        room.refresh_from_db()
+        make_move(room, black, 7, 7)
+        game = room.current_game
+        GameSession.objects.filter(id=game.id).update(turn_started_at=timezone.now() - timedelta(seconds=11))
+
+        _room, result = make_move(room, white, 7, 8)
+
+        room.refresh_from_db()
+        game.refresh_from_db()
+        self.assertEqual(result.winner, "black")
+        self.assertEqual(result.reason, "对局已因走棋超时结束")
+        self.assertEqual(room.status, Room.STATUS_WAITING)
+        self.assertEqual(game.status, GameSession.STATUS_FINISHED)
+        self.assertEqual(game.winner, "black")
+        self.assertEqual(game.end_reason, "time")
+
+    def test_host_can_transfer_room_ownership(self):
+        host = User.objects.create_user(username="host", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        spectator = User.objects.create_user(username="spectator", password="gomoku123")
+        room = Room.objects.create(name="转让房", black_player=host, white_player=white, host=host)
+        SpectatorSeat.objects.create(room=room, user=spectator, seat_number=1)
+
+        transfer_host(room, host, spectator.id)
+
+        room.refresh_from_db()
+        self.assertEqual(room.host, spectator)
+
+    def test_non_host_cannot_transfer_room_ownership(self):
+        host = User.objects.create_user(username="host", password="gomoku123")
+        white = User.objects.create_user(username="white", password="gomoku123")
+        room = Room.objects.create(name="转让房", black_player=host, white_player=white, host=host)
+
+        with self.assertRaisesMessage(ValueError, "只有房主可以执行该操作"):
+            transfer_host(room, white, white.id)
 
     def test_switch_to_empty_spectator_seat_directly(self):
         black = User.objects.create_user(username="black", password="gomoku123")

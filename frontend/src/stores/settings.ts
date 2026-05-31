@@ -96,6 +96,11 @@ export function playGameEndSound() {
   window.setTimeout(() => playTone(392, 0.24, 0.2), 280);
 }
 
+export function playCountdownSound() {
+  if (!settingsState.sound) return;
+  playTone(1046.5, 0.08, 0.32);
+}
+
 export function startBgm() {
   if (!settingsState.bgm || bgmTimer !== null) return;
   const notes = [196, 246.94, 293.66, 246.94, 220, 196, 164.81, 196];

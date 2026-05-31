@@ -373,6 +373,17 @@ def displayed_time_left(game, color, now=None):
     return max(0, remaining)
 
 
+def turn_time_limit_seconds(game, color):
+    limits = []
+    if game.move_time_seconds > 0:
+        limits.append(game.move_time_seconds)
+    if game.total_time_seconds > 0:
+        limits.append(max(0, getattr(game, time_left_field(color))))
+    if not limits:
+        return None
+    return min(limits)
+
+
 def finish_if_turn_timed_out(room):
     game = active_game(room)
     if not game:
@@ -380,8 +391,8 @@ def finish_if_turn_timed_out(room):
     now = timezone.now()
     color = current_turn_color(game)
     elapsed = turn_elapsed_seconds(game, now)
-    remaining = getattr(game, time_left_field(color))
-    if (game.move_time_seconds > 0 and elapsed >= game.move_time_seconds) or (remaining > 0 and elapsed >= remaining):
+    limit = turn_time_limit_seconds(game, color)
+    if limit is not None and elapsed >= limit:
         return finish_game(room, opponent_color(color), "time"), True
     return room, False
 
@@ -702,12 +713,10 @@ def make_move(room, user, x, y):
 
     now = timezone.now()
     elapsed = turn_elapsed_seconds(game, now)
-    if game.move_time_seconds > 0 and elapsed >= game.move_time_seconds:
+    limit = turn_time_limit_seconds(game, color)
+    if limit is not None and elapsed >= limit:
         finish_game(room, opponent_color(color), "time")
-        return room, RuleResult(True, "本步落子超时，对局已结束", status=f"{opponent_color(color)}_win", winner=opponent_color(color))
-    if getattr(game, time_left_field(color)) > 0 and elapsed >= getattr(game, time_left_field(color)):
-        finish_game(room, opponent_color(color), "time")
-        return room, RuleResult(True, "总用时耗尽，对局已结束", status=f"{opponent_color(color)}_win", winner=opponent_color(color))
+        return room, RuleResult(True, "走棋用时耗尽，对局已结束", status=f"{opponent_color(color)}_win", winner=opponent_color(color))
 
     Move.objects.create(
         room=room,
@@ -884,6 +893,27 @@ def surrender(room, user):
         raise ValueError("当前没有进行中的对局")
     finish_game(room, opponent_color(color), "surrender")
     room.refresh_from_db()
+    return room
+
+
+@transaction.atomic
+def transfer_host(room, host, target_user_id):
+    room = Room.objects.select_for_update().get(id=room.id)
+    ensure_host(room, host)
+    target_user_id = int(target_user_id)
+    if target_user_id == host.id:
+        raise ValueError("你已经是房主")
+    target = seat_user(room, "black") if room.black_player_id == target_user_id else None
+    if target is None and room.white_player_id == target_user_id:
+        target = room.white_player
+    spectator = room.spectators.select_related("user").filter(user_id=target_user_id).first()
+    if target is None and spectator:
+        target = spectator.user
+    if target is None:
+        raise ValueError("目标玩家不在房间内")
+    room.host = target
+    room.last_activity_at = timezone.now()
+    room.save(update_fields=["host", "last_activity_at"])
     return room
 
 

@@ -26,6 +26,7 @@ urlpatterns = [
     path("rooms/<int:room_id>/settings/", views.room_settings_view),
     path("rooms/<int:room_id>/leave/", views.leave_room_view),
     path("rooms/<int:room_id>/kick/", views.kick_room_user_view),
+    path("rooms/<int:room_id>/transfer-host/", views.transfer_room_host_view),
     path("rooms/<int:room_id>/invite/", views.invite_room_user_view),
     path("rooms/<int:room_id>/state/", views.room_state),
     path("rooms/<int:room_id>/switch-seat/", views.switch_seat_view),

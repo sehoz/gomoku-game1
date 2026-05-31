@@ -57,6 +57,7 @@ from .services import (
     store_pending_seat_switch,
     surrender,
     switch_position,
+    transfer_host,
 )
 
 
@@ -506,7 +507,7 @@ def active_rooms_queryset():
 
 def parse_room_timing(data):
     try:
-        move_time_seconds = int(data.get("move_time_seconds", 30))
+        move_time_seconds = int(data.get("move_time_seconds", 60))
         total_time_seconds = int(data.get("total_time_seconds", 600))
     except (TypeError, ValueError):
         raise ValueError("计时参数无效")
@@ -545,7 +546,7 @@ def rooms(request):
     if rule_set not in {Room.RULE_STANDARD, Room.RULE_RENJU}:
         return Response({"detail": "规则参数无效"}, status=status.HTTP_400_BAD_REQUEST)
     try:
-        move_time_seconds = int(request.data.get("move_time_seconds", 30))
+        move_time_seconds = int(request.data.get("move_time_seconds", 60))
         total_time_seconds = int(request.data.get("total_time_seconds", 600))
     except (TypeError, ValueError):
         return Response({"detail": "计时参数无效"}, status=status.HTTP_400_BAD_REQUEST)
@@ -670,6 +671,19 @@ def kick_room_user_view(request, room_id):
         return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
     except (TypeError, ValueError) as exc:
         broadcast_room_state(room_id)
+        return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def transfer_room_host_view(request, room_id):
+    try:
+        room = transfer_host(Room.objects.get(id=room_id), request.user, request.data.get("user_id"))
+        broadcast_room_state(room.id)
+        return Response(RoomSerializer(room).data)
+    except Room.DoesNotExist:
+        return Response({"detail": "房间不存在"}, status=status.HTTP_404_NOT_FOUND)
+    except (TypeError, ValueError) as exc:
         return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 

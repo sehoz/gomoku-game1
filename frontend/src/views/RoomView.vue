@@ -9,7 +9,7 @@ import Modal from "../components/Modal.vue";
 import PlayerDetailModal from "../components/PlayerDetailModal.vue";
 import { authState, isAuthenticated } from "../stores/auth";
 import { presenceState } from "../stores/presence";
-import { playChatSound, playGameEndSound, playGameStartSound, playStoneSound } from "../stores/settings";
+import { playChatSound, playCountdownSound, playGameEndSound, playGameStartSound, playStoneSound } from "../stores/settings";
 import { nextTurn } from "../rules";
 import type { ChatMessage, Move, Room, RoomState, RuleSet, SeatSwitchRequest, StoneColor, UndoRequest } from "../types";
 
@@ -38,9 +38,10 @@ const roomSettingsForm = ref({
   rule_set: "standard" as RuleSet,
   has_password: false,
   password: "",
-  move_time_seconds: 30,
+  move_time_seconds: 60,
   total_time_minutes: 10,
 });
+const lastCountdownSecond = ref<number | null>(null);
 let socket: WebSocket | null = null;
 let heartbeatTimer: number | null = null;
 let statePollTimer: number | null = null;
@@ -125,6 +126,15 @@ const stepTimeLeft = computed(() => {
   const value = Math.min(moveLeft, totalLeft);
   return Number.isFinite(value) ? Math.max(0, value) : -1;
 });
+const effectiveStepLimit = computed(() => {
+  const game = currentGame.value;
+  const moveLimit = game?.move_time_seconds ?? room.value?.move_time_seconds ?? 0;
+  const totalLimit = game && activeGame.value ? (turn.value === "black" ? blackTimeLeft.value : whiteTimeLeft.value) : room.value?.total_time_seconds ?? 0;
+  if (moveLimit <= 0) return totalLimit > 0 ? totalLimit : -1;
+  if (totalLimit <= 0) return moveLimit;
+  return Math.min(moveLimit, totalLimit);
+});
+const stepTimeWarning = computed(() => activeGame.value && stepTimeLeft.value >= 0 && stepTimeLeft.value <= 10);
 
 function timeLeftFor(color: StoneColor) {
   const game = currentGame.value;
@@ -146,6 +156,17 @@ function formatSeconds(seconds: number) {
   const minutes = Math.floor(value / 60);
   const rest = value % 60;
   return `${minutes}:${String(rest).padStart(2, "0")}`;
+}
+
+function maybePlayCountdownSound() {
+  if (!activeGame.value || stepTimeLeft.value < 0 || stepTimeLeft.value > 10) {
+    lastCountdownSecond.value = null;
+    return;
+  }
+  const currentSecond = Math.ceil(stepTimeLeft.value);
+  if (currentSecond <= 0 || currentSecond > 10 || lastCountdownSecond.value === currentSecond) return;
+  lastCountdownSecond.value = currentSecond;
+  playCountdownSound();
 }
 
 function showGameFeedback(kind: "start" | "end", title: string, detail: string) {
@@ -357,6 +378,7 @@ async function load() {
   }, 1000);
   clockTimer = window.setInterval(() => {
     nowTick.value = Date.now();
+    maybePlayCountdownSound();
   }, 250);
   connectSocket();
 }
@@ -610,6 +632,17 @@ async function kickUser(userId: number) {
   }
 }
 
+async function transferHost(userId: number) {
+  if (!isHost.value || userId === authState.user?.id) return;
+  try {
+    await api.transferRoomHost(roomId, userId);
+    notice.value = "房主已转让。";
+    await loadState(false);
+  } catch (err) {
+    notice.value = isTransientError(err) ? "网络波动，房主转让未确认。" : errorMessage(err, "房主转让失败");
+  }
+}
+
 async function inviteUser(userId: number) {
   if (!isHost.value) return;
   try {
@@ -664,7 +697,7 @@ onUnmounted(() => {
             <span class="status-label">当前回合</span>
             <strong class="stone-status"><span :class="['stone-icon', `stone-icon-${turn}`]" />{{ turnLabel }}</strong>
           </div>
-          <div class="control-item"><span class="status-label">步时</span><strong>{{ formatSeconds(stepTimeLeft) }}</strong></div>
+          <div :class="['control-item', { 'time-warning': stepTimeWarning }]"><span class="status-label">步时</span><strong>{{ formatSeconds(stepTimeLeft) }} / {{ formatSeconds(effectiveStepLimit) }}</strong></div>
           <div class="control-item"><span class="status-label">状态</span><strong>{{ statusLabel }}</strong></div>
           <div class="control-actions">
             <button class="primary-button" :disabled="!canReady" type="button" @click="toggleReady"><Check :size="18" />{{ myReady ? "取消准备" : "准备" }}</button>
@@ -683,11 +716,11 @@ onUnmounted(() => {
         <div class="seat-list">
           <div class="seat-row">
             <div class="seat-player"><button v-if="room?.black_player" class="avatar-button" type="button" title="查看玩家信息" @click="openPlayerDetail(room.black_player)"><Avatar :username="room?.black_player_name || '等待'" :avatar-url="room?.black_player_avatar_url" /></button><Avatar v-else :username="room?.black_player_name || '等待'" :avatar-url="room?.black_player_avatar_url" /><div><strong>{{ room?.black_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-black">黑棋</span><span v-if="room?.host === room?.black_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.black_ready ? 'ready' : 'waiting']">{{ room?.black_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(blackTimeLeft) }}</span></span></div></div>
-            <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo('black')" @click="switchPosition('black')">{{ seatButtonLabel('black', Boolean(room?.black_player)) }}</button><button v-if="isHost && room?.black_player && room.black_player !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(room.black_player)">踢出</button></div>
+            <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo('black')" @click="switchPosition('black')">{{ seatButtonLabel('black', Boolean(room?.black_player)) }}</button><button v-if="isHost && room?.black_player && room.black_player !== authState.user?.id" class="secondary-button" type="button" @click="transferHost(room.black_player)">转让房主</button><button v-if="isHost && room?.black_player && room.black_player !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(room.black_player)">踢出</button></div>
           </div>
           <div class="seat-row">
             <div class="seat-player"><button v-if="room?.white_player" class="avatar-button" type="button" title="查看玩家信息" @click="openPlayerDetail(room.white_player)"><Avatar :username="room?.white_player_name || '等待'" :avatar-url="room?.white_player_avatar_url" /></button><Avatar v-else :username="room?.white_player_name || '等待'" :avatar-url="room?.white_player_avatar_url" /><div><strong>{{ room?.white_player_name || "等待好友加入" }} <span class="seat-inline-label seat-badge-white">白棋</span><span v-if="room?.host === room?.white_player" class="seat-inline-label">房主</span></strong><span class="seat-meta-line"><span :class="['ready-badge', room?.white_ready ? 'ready' : 'waiting']">{{ room?.white_ready ? "已准备" : "未准备" }}</span><span class="time-pill">{{ formatSeconds(whiteTimeLeft) }}</span></span></div></div>
-            <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo('white')" @click="switchPosition('white')">{{ seatButtonLabel('white', Boolean(room?.white_player)) }}</button><button v-if="isHost && room?.white_player && room.white_player !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(room.white_player)">踢出</button></div>
+            <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo('white')" @click="switchPosition('white')">{{ seatButtonLabel('white', Boolean(room?.white_player)) }}</button><button v-if="isHost && room?.white_player && room.white_player !== authState.user?.id" class="secondary-button" type="button" @click="transferHost(room.white_player)">转让房主</button><button v-if="isHost && room?.white_player && room.white_player !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(room.white_player)">踢出</button></div>
           </div>
         </div>
         <div class="spectator-panel">
@@ -695,7 +728,7 @@ onUnmounted(() => {
           <div class="spectator-list">
             <div v-for="slot in spectatorSlots" :key="slot.seatNumber" class="spectator-row">
               <div class="spectator-main"><button v-if="slot.user" class="avatar-button" type="button" title="查看玩家信息" @click="openPlayerDetail(slot.user.user)"><Avatar :username="slot.user.username" :avatar-url="slot.user.avatar_url" /></button><Avatar v-else username="空位" avatar-url="" /><span class="seat-badge">观众{{ slot.seatNumber }}</span><strong>{{ slot.user?.username || "空位" }}</strong><span v-if="slot.user && room?.host === slot.user.user" class="seat-inline-label">房主</span></div>
-              <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo(`spectator${slot.seatNumber}`)" @click="switchPosition(`spectator${slot.seatNumber}`)">{{ seatButtonLabel(`spectator${slot.seatNumber}`, Boolean(slot.user)) }}</button><button v-if="isHost && slot.user && slot.user.user !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(slot.user.user)">踢出</button></div>
+              <div class="inline-actions"><button class="secondary-button" :disabled="!canSwitchTo(`spectator${slot.seatNumber}`)" @click="switchPosition(`spectator${slot.seatNumber}`)">{{ seatButtonLabel(`spectator${slot.seatNumber}`, Boolean(slot.user)) }}</button><button v-if="isHost && slot.user && slot.user.user !== authState.user?.id" class="secondary-button" type="button" @click="transferHost(slot.user.user)">转让房主</button><button v-if="isHost && slot.user && slot.user.user !== authState.user?.id" class="secondary-button danger-button" type="button" @click="kickUser(slot.user.user)">踢出</button></div>
             </div>
           </div>
         </div>

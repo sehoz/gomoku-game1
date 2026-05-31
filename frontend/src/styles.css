@@ -59,6 +59,7 @@ p { color: var(--muted); line-height: 1.65; }
 .solo-controlbar { grid-template-columns: repeat(3, minmax(104px, 1fr)) minmax(240px, auto); }
 .control-item, .control-notice, .control-actions { display: grid; align-content: center; min-height: 56px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.86); }
 .control-item strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.control-item.time-warning { border-color: rgba(220,38,38,.36); background: #fef2f2; color: #991b1b; box-shadow: inset 0 0 0 1px rgba(220,38,38,.08); }
 .control-notice { color: var(--accent-strong); font-weight: 900; line-height: 1.45; }
 .control-notice.warning { border-color: rgba(154,52,18,.28); background: #fff7ed; color: var(--warning); }
 .board-notice { margin-bottom: 14px; }
@@ -102,7 +103,7 @@ button:active:not(:disabled), .mode-card:active, .profile-pill:active, .upload-b
 .board-grid { position: relative; width: 100%; height: 100%; border-right: 1px solid var(--board-line); border-bottom: 1px solid var(--board-line); background-image: linear-gradient(to right, var(--board-line) 1px, transparent 1px), linear-gradient(to bottom, var(--board-line) 1px, transparent 1px); touch-action: manipulation; }
 .board-grid.board-can-play { cursor: pointer; }
 .board-star { position: absolute; z-index: 0; width: 9px; aspect-ratio: 1; border-radius: 50%; background: #4f3822; transform: translate(-50%, -50%); box-shadow: 0 1px 2px rgba(40, 25, 12, .18); pointer-events: none; }
-.board-point { position: absolute; z-index: 2; display: grid; place-items: center; width: clamp(26px, 8.2%, 42px); aspect-ratio: 1; border: 0; background: transparent; transform: translate(-50%, -50%); pointer-events: none; }
+.board-point { position: absolute; z-index: 2; display: grid; place-items: center; width: calc(var(--board-step) * .96); aspect-ratio: 1; border: 0; background: transparent; transform: translate(-50%, -50%); pointer-events: none; }
 .stone { position: relative; z-index: 3; display: grid; place-items: center; width: 88%; aspect-ratio: 1; border-radius: 50%; box-shadow: 0 3px 7px rgba(45, 31, 20, .26), inset 0 1px 1px #ffffff; }
 .stone-black { background: radial-gradient(circle at 36% 30%, #4b5250 0 12%, #252a29 30%, #080a0a 76%); }
 .stone-white { border: 1px solid #b6c0bc; background: radial-gradient(circle at 36% 30%, #ffffff 0 18%, #f8faf8 40%, #dfe5e2 78%, #c5cfca 100%); }

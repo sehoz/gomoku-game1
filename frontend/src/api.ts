@@ -137,6 +137,9 @@ export const api = {
   async kickRoomUser(id: number, user_id: number) {
     return request<{ room: Room | null }>(`/rooms/${id}/kick/`, { method: "POST", body: JSON.stringify({ user_id }) });
   },
+  async transferRoomHost(id: number, user_id: number) {
+    return request<Room>(`/rooms/${id}/transfer-host/`, { method: "POST", body: JSON.stringify({ user_id }) });
+  },
   async inviteRoomUser(id: number, user_id: number) {
     return request<{ invitation: RoomInvitation }>(`/rooms/${id}/invite/`, { method: "POST", body: JSON.stringify({ user_id }) });
   },
